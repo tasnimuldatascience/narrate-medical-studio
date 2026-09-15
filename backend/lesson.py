@@ -12,9 +12,11 @@ def _timestamp(seconds):
     seconds, milliseconds = divmod(milliseconds, 1000)
     return f'{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}'
 
-def package(folder,title,chapters,cues,burn_captions=False):
+def package(folder,title,chapters,cues,burn_captions=False,transcript=None):
     folder = Path(folder)
-    payload=json.dumps({'title':title,'chapters':chapters,'cues':cues,'burnedCaptions':bool(burn_captions)},ensure_ascii=True).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
+    payload=json.dumps({'title':title,'chapters':chapters,'cues':cues,
+        'transcript':transcript if transcript is not None else cues,
+        'burnedCaptions':bool(burn_captions)},ensure_ascii=True).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
     template=(Path(__file__).parent/'lesson.html').read_text(encoding='utf-8')
     html=template.replace('/*LESSON_DATA*/',payload)
     (folder/'index.html').write_text(html,encoding='utf-8')

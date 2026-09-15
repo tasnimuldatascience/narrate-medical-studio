@@ -7,9 +7,13 @@ flowchart TD
     A[Import PPTX or PPTM] --> B[Validate archive and sanitize a rendering copy]
     B --> C[Extract text, notes, tables and references]
     B --> D[Render source slides with PowerPoint]
+    D --> O[Optional local OCR transcription]
+    O --> P[Author corrects image text and checks against slide]
     C --> E[Optional local Ollama narration draft]
+    P --> E
+    E --> Q[Local editorial pass compares draft with source]
     D --> F[Practitioner edits the lesson]
-    E --> F
+    Q --> F
     F --> G[Author source regions and knowledge checks]
     G --> H[Approve the exact revision]
     H --> I[Local Kokoro narration]
@@ -22,9 +26,23 @@ flowchart TD
 
 ## Source and review
 
-The uploaded original is retained locally. Conversion operates on a copy with macros, active embedded content, and external relationships removed. Text extraction does not perform OCR or interpret anatomical images. Ollama receives source text as untrusted content and returns a structured draft with review flags.
+The uploaded original is retained locally. Conversion operates on a copy with macros, active embedded content, and external relationships removed. OOXML extraction reads editable text, notes, and tables. A separate optional OCR step transcribes rendered slide images; neither step interprets anatomy or checks medical validity.
 
-The author supplies diagram regions, labels, narration, and any assessment. An edit to narration, a question, or a visual region invalidates its approval. The API checks slide revisions to prevent stale browser windows overwriting newer reviews. Export snapshots the reviewed lesson and writes its source hash, settings, review metadata, and quality results into a manifest.
+Under **Source > Image text**, run OCR and compare its proposed text with the actual slide. Correct spelling, reading order, numbers, units, and labels, then explicitly mark the transcription checked. OCR returns line confidence and normalized image boxes; its confidence is a recognition score, not confidence in a medical claim. Its result and the author's editable image text are stored separately. A later OCR run does not overwrite existing authored image text.
+
+Drafting also runs OCR automatically when a rendered image-only slide has neither native text nor a saved transcription. It commits the detected source and narration together only after both writing passes succeed. Cancellation or a model failure preserves the previous script and source. The new transcription remains unchecked.
+
+RapidOCR 3.9.2 runs its small PP-OCRv6 detector/recognizer and orientation classifier locally through ONNX Runtime. `scripts/download_ocr.py` prepares the assets already bundled in the installed, pinned RapidAI wheel and extracts the embedded character dictionary. Model and dictionary hashes are checked before use. Runtime model/dictionary/font downloads are disabled; only known project slide PNGs are accepted, and decoded pixels are passed into the dependency. OCR readiness is reported in Setup. A current native inference call must finish before cancellation is acknowledged.
+
+The author supplies diagram regions, labels, narration, and any assessment. An edit to narration, a question, a visual region, or the source transcription/check state invalidates narration approval. Populated image text must be checked before a slide can be approved. The API checks slide revisions to prevent stale browser windows overwriting newer reviews. Export snapshots the reviewed lesson and writes its source hash, image transcription/check state, settings, review metadata, and quality results into a manifest.
+
+## Spoken narration editing
+
+Optional local AI drafting now makes two Ollama generation calls. The first produces a spoken draft from extracted text, speaker notes, tables, and available image transcription. The second performs an editorial pass against those same sources, checking the draft's wording, qualifiers, quantities, omissions, and source disagreements while improving sentence structure. Sources and the initial draft are treated as untrusted data, not instructions. The result is a structured, unapproved narration with review flags and diagnostic information.
+
+The current prompt version is `medical-source-v5-editor`; it is still being evaluated. An editorial pass or favorable readability score does not establish that the output preserves every fact. Authors must compare the final script with all accepted source material, especially where notes qualify or contradict visible slide text. An unresolved disagreement needs an explicit author decision, not an automatic choice of whichever wording sounds clearer.
+
+`qwen3.5:9b` is installed and tuned on the development workstation as a higher-capacity local writing option. The lighter `qwen3:4b` has shown qualifier-preservation errors in evaluation. No general narration-quality pass is claimed for either model. Model speed and suitability depend on the workstation; source fidelity and spoken clarity require separate review.
 
 ## Voice and timing
 
@@ -42,10 +60,11 @@ The exported learner page contains chapter navigation, searchable and seekable t
 
 ## Verification used during development
 
-1. Automated source-validation, revision, approval, concurrency, caption, region, and packaging tests.
+1. Automated source-validation, revision, approval, concurrency, caption, region, packaging, and OCR tests, including actual OCR inference with Python networking and dependency downloads blocked.
 2. TypeScript checking, production build, and formatting checks.
 3. Synthetic PowerPoint → real renderer → real neural speech → both video styles.
 4. Live HTTP workflow through import, rendering, approval, export, and validated downloads.
 5. Visual frame inspection and browser inspection of authoring controls.
+6. Comparison of OCR and draft narration with supplied medical slide images and notes. This identifies transcription and source-fidelity problems; it is not clinical guideline validation or a quality pass for the current editorial prompt.
 
 See [VALIDATION.md](VALIDATION.md) for measured results and limitations, including the browser tool's local-file restriction and the embedded-browser playback crash.

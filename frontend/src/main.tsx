@@ -66,6 +66,9 @@ type Slide = {
   image: boolean;
   knowledge?: Knowledge | null;
   visual_cues?: VisualCue[];
+  visual_text?: string;
+  source_reviewed?: boolean;
+  ocr?: { text: string; lines: unknown[]; engine: string };
 };
 type Job = {
   status: string;
@@ -107,6 +110,7 @@ type Health = {
   renderer: boolean;
   renderer_name: string;
   kokoro: boolean;
+  ocr: boolean;
   piper: boolean;
   windows_voice: boolean;
   data_path: string;
@@ -171,13 +175,18 @@ function App() {
     [script, setScript] = useState(""),
     [knowledge, setKnowledge] = useState<Knowledge>(EMPTY_CHECK),
     [visualCues, setVisualCues] = useState<VisualCue[]>([]),
-    [cuePlacement, setCuePlacement] = useState<number | null>(null);
+    [cuePlacement, setCuePlacement] = useState<number | null>(null),
+    [visualText, setVisualText] = useState(""),
+    [sourceReviewed, setSourceReviewed] = useState(false);
   const [reviewer, setReviewer] = useState(
       localStorage.getItem("narrate-reviewer") || "",
     ),
     [ack, setAck] = useState(false),
     [sourceTab, setSourceTab] = useState("text"),
     [editorTab, setEditorTab] = useState("narration");
+  const [narrationStyle, setNarrationStyle] = useState<
+    "conversational" | "concise"
+  >("conversational");
   const [model, setModel] = useState(""),
     [engine, setEngine] = useState("kokoro"),
     [voice, setVoice] = useState("af_heart"),
@@ -194,20 +203,52 @@ function App() {
     dialogRef = useRef<HTMLElement>(null),
     pending = useRef(false),
     loadingRef = useRef(false),
-    engineChosen = useRef(false);
+    engineChosen = useRef(false),
+    modelChosen = useRef(false),
+    preserveSlideEdits = useRef(false);
   loadingRef.current = loading;
   const slide = project?.slides[index];
-  const dirty =
+  const drafting = busy(project) && project?.job.kind === "draft";
+  const modelAvailable = !!health?.models.includes(model);
+  const narrationWordCount = script.trim()
+    ? script.trim().split(/\s+/).length
+    : 0;
+  const narrationSentences = Array.from(
+    new Intl.Segmenter("en", { granularity: "sentence" }).segment(script),
+  )
+    .map((part) => part.segment.trim())
+    .filter(Boolean);
+  const sentenceWordCounts = narrationSentences.map(
+    (sentence) => sentence.split(/\s+/).length,
+  );
+  const averageSentenceWords = sentenceWordCounts.length
+    ? Math.round(
+        sentenceWordCounts.reduce((sum, count) => sum + count, 0) /
+          sentenceWordCounts.length,
+      )
+    : 0;
+  const longSentenceCount = sentenceWordCounts.filter(
+    (count) => count > 26,
+  ).length;
+  const sourceDirty =
+    !!slide &&
+    (visualText !== (slide.visual_text || "") ||
+      sourceReviewed !== !!slide.source_reviewed);
+  const contentDirty =
     !!slide &&
     (script !== slide.narration ||
       JSON.stringify(knowledge) !==
         JSON.stringify(slide.knowledge || EMPTY_CHECK) ||
       JSON.stringify(visualCues) !== JSON.stringify(slide.visual_cues || []));
+  const dirty = contentDirty || sourceDirty;
   const reload = async () => setProjects(await api<Summary[]>("/projects"));
   const loadHealth = async () => {
     const h = await api<Health>("/health");
     setHealth(h);
-    setModel((m) => m || h.models[0] || "");
+    if (!modelChosen.current)
+      setModel(
+        h.models.includes("qwen3.5:9b") ? "qwen3.5:9b" : h.models[0] || "",
+      );
     if (!engineChosen.current) {
       setEngine(
         h.kokoro
@@ -245,9 +286,15 @@ function App() {
   }, []);
   useEffect(() => {
     if (slide) {
+      if (preserveSlideEdits.current) {
+        preserveSlideEdits.current = false;
+        return;
+      }
       setScript(slide.narration);
       setKnowledge(slide.knowledge || EMPTY_CHECK);
       setVisualCues(slide.visual_cues || []);
+      setVisualText(slide.visual_text || "");
+      setSourceReviewed(!!slide.source_reviewed);
       setCuePlacement(null);
       setAck(false);
     }
@@ -359,7 +406,7 @@ function App() {
     if (!dirty) return true;
     if (
       !window.confirm(
-        "You have unsaved narration, knowledge check, or visual story edits. Discard them?",
+        "You have unsaved narration, image text, knowledge check, or visual story edits. Discard them?",
       )
     )
       return false;
@@ -367,6 +414,8 @@ function App() {
       setScript(slide.narration);
       setKnowledge(slide.knowledge || EMPTY_CHECK);
       setVisualCues(slide.visual_cues || []);
+      setVisualText(slide.visual_text || "");
+      setSourceReviewed(!!slide.source_reviewed);
       setCuePlacement(null);
       setAck(false);
     }
@@ -443,18 +492,51 @@ function App() {
       return;
     }
     await perform(async () => {
-      setProject(
-        await api<Project>(`/projects/${project.id}/slides/${slide.number}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            narration: script,
-            revision: slide.revision,
-            knowledge: knowledge.question.trim() ? knowledge : null,
-            visual_cues: visualCues,
-          }),
-        }),
-      );
-      setNotice("Saved. Review this revision before approval.");
+      let updated = project;
+      try {
+        if (sourceDirty)
+          updated = await api<Project>(
+            `/projects/${project.id}/slides/${slide.number}/source`,
+            {
+              method: "PUT",
+              body: JSON.stringify({
+                revision: slide.revision,
+                visual_text: visualText,
+                source_reviewed: sourceReviewed,
+              }),
+            },
+          );
+        if (contentDirty) {
+          const revision = updated.slides.find(
+            (item) => item.number === slide.number,
+          )?.revision;
+          if (revision === undefined)
+            throw new Error(
+              "The saved source revision could not be found. Reload the project before saving.",
+            );
+          updated = await api<Project>(
+            `/projects/${project.id}/slides/${slide.number}`,
+            {
+              method: "PUT",
+              body: JSON.stringify({
+                narration: script,
+                revision,
+                knowledge: knowledge.question.trim() ? knowledge : null,
+                visual_cues: visualCues,
+              }),
+            },
+          );
+        }
+        setProject(updated);
+        setNotice("Saved. Review this revision before approval.");
+      } catch (error) {
+        // A successful source save must not invalidate retrying pending script edits.
+        if (updated !== project) {
+          preserveSlideEdits.current = true;
+          setProject(updated);
+        }
+        throw error;
+      }
     });
   };
   const approved = project?.slides.filter((s) => s.approved).length || 0;
@@ -1126,25 +1208,154 @@ function App() {
                     <span>Reference while reviewing</span>
                   </div>
                   <div className="small-tabs">
-                    {["text", "notes", "tables", "references"].map((t) => (
-                      <button
-                        aria-pressed={sourceTab === t}
-                        className={sourceTab === t ? "active" : ""}
-                        onClick={() => setSourceTab(t)}
-                        key={t}
-                      >
-                        {t === "text"
-                          ? "Slide text"
-                          : t === "notes"
-                            ? "Speaker notes"
-                            : t[0].toUpperCase() + t.slice(1)}
-                      </button>
-                    ))}
+                    {["text", "notes", "image", "tables", "references"].map(
+                      (t) => (
+                        <button
+                          aria-pressed={sourceTab === t}
+                          className={sourceTab === t ? "active" : ""}
+                          onClick={() => setSourceTab(t)}
+                          key={t}
+                        >
+                          {t === "text"
+                            ? "Slide text"
+                            : t === "notes"
+                              ? "Speaker notes"
+                              : t === "image"
+                                ? "Image text"
+                                : t[0].toUpperCase() + t.slice(1)}
+                        </button>
+                      ),
+                    )}
                   </div>
-                  <div className="source-content">
+                  <div
+                    className={`source-content ${sourceTab === "image" ? "source-image-content" : ""}`}
+                  >
+                    {sourceTab === "image" && (
+                      <fieldset
+                        className="image-text-editor"
+                        disabled={loading || busy(project)}
+                      >
+                        <legend className="sr-only">
+                          Image text transcription
+                        </legend>
+                        <div className="image-text-heading">
+                          <strong>Bring image text into the source.</strong>
+                          <span>
+                            {sourceDirty
+                              ? "Unsaved changes"
+                              : sourceReviewed
+                                ? "Transcription checked"
+                                : "Needs checking"}
+                          </span>
+                        </div>
+                        <p>
+                          Read the slide image with offline OCR, or type its
+                          text below. OCR can misread medical terms, symbols,
+                          units, and reading order. Check the transcription
+                          against the original.
+                        </p>
+                        <button
+                          type="button"
+                          className="button secondary"
+                          disabled={!health?.ocr || !slide.image || dirty}
+                          onClick={() =>
+                            void action(`/slides/${slide.number}/ocr`)
+                          }
+                        >
+                          <FileText size={16} />
+                          Read slide text offline
+                        </button>
+                        {!health?.ocr && (
+                          <p className="image-text-hint">
+                            Offline text recognition is unavailable. Check Setup
+                            & preferences for runtime readiness; you can still
+                            type the transcription here.
+                          </p>
+                        )}
+                        {!slide.image && (
+                          <p className="image-text-hint">
+                            Render the slide preview before running text
+                            recognition.
+                          </p>
+                        )}
+                        {dirty && (
+                          <p className="image-text-hint">
+                            Save or discard your slide edits before reading the
+                            image again.
+                          </p>
+                        )}
+                        {slide.ocr && (
+                          <p className="image-text-hint">
+                            OCR engine: {slide.ocr.engine}. Extracted text
+                            remains uncertain until you check it.
+                          </p>
+                        )}
+                        {slide.ocr?.text && (
+                          <details className="ocr-candidate">
+                            <summary>Inspect detected text</summary>
+                            <textarea
+                              readOnly
+                              value={slide.ocr.text}
+                              aria-label="Detected OCR text"
+                            />
+                            <button
+                              type="button"
+                              className="button secondary"
+                              onClick={() => {
+                                setVisualText(slide.ocr?.text || "");
+                                setSourceReviewed(false);
+                              }}
+                            >
+                              Use detected text
+                            </button>
+                            <p className="image-text-hint">
+                              Replaces the transcription below with this OCR
+                              candidate. Check it again before saving your
+                              review.
+                            </p>
+                          </details>
+                        )}
+                        <label>
+                          Text visible in the slide image
+                          <textarea
+                            value={visualText}
+                            onChange={(event) => {
+                              setVisualText(event.target.value);
+                              setSourceReviewed(false);
+                            }}
+                            placeholder="Transcribe the visible wording, including labels, units, and symbols. Add no unsupported interpretation."
+                          />
+                        </label>
+                        <label className="checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={sourceReviewed}
+                            disabled={!visualText.trim()}
+                            onChange={(event) =>
+                              setSourceReviewed(event.target.checked)
+                            }
+                          />
+                          I checked this transcription against the slide
+                        </label>
+                        <button
+                          type="button"
+                          className="button primary"
+                          disabled={!sourceDirty}
+                          onClick={() => void save()}
+                        >
+                          Save image text
+                        </button>
+                        <p className="image-text-hint">
+                          Saving resets slide approval and preserves your other
+                          pending slide edits. Checking the transcription does
+                          not approve the clinical lesson.
+                        </p>
+                      </fieldset>
+                    )}
+
                     {sourceTab === "text" &&
                       (slide.text ||
-                        "No editable text was found. Review the slide image and supply a source-grounded narration.")}
+                        "No editable text was found. Open Image text to read the slide offline or transcribe its visible wording, then review the source before drafting.")}
                     {sourceTab === "notes" &&
                       (slide.notes || "This slide has no speaker notes.")}
                     {sourceTab === "tables" &&
@@ -1224,27 +1435,83 @@ function App() {
                       disabled={loading || busy(project)}
                     />
                     <div className="script-meta">
-                      <span>
-                        {script.trim() ? script.trim().split(/\s+/).length : 0}{" "}
-                        words
-                      </span>
+                      <span>{narrationWordCount} words</span>
                       <span>
                         <Clock3 size={13} />~
-                        {duration(script.split(/\s+/).length / 2.4)} estimated
+                        {duration(narrationWordCount / 2.4)} estimated
                       </span>
                     </div>
+                    <section
+                      className="spoken-editing-guide"
+                      aria-label="Spoken delivery editing guide"
+                    >
+                      <div>
+                        <strong>
+                          {narrationWordCount ? averageSentenceWords : "—"}
+                        </strong>
+                        <span>words per sentence, avg.</span>
+                      </div>
+                      <div>
+                        <strong>{longSentenceCount}</strong>
+                        <span>sentences over 26 words</span>
+                      </div>
+                      <p>
+                        {longSentenceCount
+                          ? "Try splitting long sentences into one idea per breath. Read the explanation aloud to check its flow."
+                          : "Read the explanation aloud. Aim for one clear idea at a time."}{" "}
+                        Counts are an editing guide; medical meaning still needs
+                        your review.
+                      </p>
+                    </section>
+                    <label className="narration-delivery-label">
+                      Narration delivery
+                      <select
+                        value={narrationStyle}
+                        disabled={loading || busy(project)}
+                        onChange={(event) =>
+                          setNarrationStyle(
+                            event.target.value as "conversational" | "concise",
+                          )
+                        }
+                      >
+                        <option value="conversational">
+                          Conversational teaching
+                        </option>
+                        <option value="concise">Concise explanation</option>
+                      </select>
+                    </label>
+                    <p className="narration-delivery-help">
+                      {narrationStyle === "conversational"
+                        ? "A spoken explanation with a natural teaching flow and clear transitions."
+                        : "A compact explanation that gets to the main point directly."}
+                    </p>
                     <div className="draft-tools">
                       <button
                         className="button secondary"
-                        disabled={dirty || loading || busy(project) || !model}
+                        disabled={
+                          dirty || loading || busy(project) || !modelAvailable
+                        }
+                        aria-describedby={
+                          drafting
+                            ? "source-draft-help draft-progress"
+                            : "source-draft-help"
+                        }
+                        aria-busy={drafting}
                         onClick={() =>
                           void action(`/slides/${slide.number}/draft`, {
                             model,
+                            style: narrationStyle,
                           })
                         }
                       >
-                        <WandSparkles size={15} />
-                        Draft with local AI
+                        {drafting ? (
+                          <LoaderCircle size={15} className="spin" />
+                        ) : (
+                          <WandSparkles size={15} />
+                        )}
+                        {drafting
+                          ? "Drafting & reviewing…"
+                          : "Draft a clear explanation"}
                       </button>
                       <button
                         className="button primary compact"
@@ -1254,6 +1521,26 @@ function App() {
                         Save
                       </button>
                     </div>
+                    {drafting && (
+                      <p
+                        id="draft-progress"
+                        className="draft-progress"
+                        role="status"
+                      >
+                        Writing the draft and running source and editorial
+                        checks locally. This can take several minutes. Review
+                        the result against your source when it finishes.
+                      </p>
+                    )}
+                    <p id="source-draft-help" className="source-draft-help">
+                      Drafts use slide text, speaker notes, and image
+                      transcription. Drafting and source/editorial checks may
+                      take several minutes. A new draft replaces the saved
+                      script and needs your fresh review.
+                      {dirty && " Save or discard current edits first."}
+                      {!modelAvailable &&
+                        " Choose an installed local writing model in Setup & preferences to draft."}
+                    </p>
                     <p className="origin">Source: {slide.draft_origin}</p>
                   </>
                 ) : editorTab === "visual" ? (
@@ -1408,6 +1695,7 @@ function App() {
                           dirty ||
                           !slide.image ||
                           !script.trim() ||
+                          (!!visualText.trim() && !sourceReviewed) ||
                           busy(project) ||
                           loading
                         }
@@ -1422,6 +1710,12 @@ function App() {
                         <Check size={16} />
                         Approve this slide
                       </button>
+                      {!!visualText.trim() && !sourceReviewed && (
+                        <small>
+                          Open Image text and check the transcription against
+                          the slide before approving.
+                        </small>
+                      )}
                       <small>Voice and export unlock after approval.</small>
                     </>
                   )}
@@ -1544,6 +1838,11 @@ function App() {
                   ],
                   [health?.ffmpeg, "Video assembly", "FFmpeg · 1080p H.264"],
                   [
+                    health?.ocr,
+                    "Image text recognition",
+                    "Offline OCR · review extracted text before use",
+                  ],
+                  [
                     !!health?.models.length,
                     "Local narration AI",
                     health?.models.join(", ") ||
@@ -1578,11 +1877,20 @@ function App() {
                   Lesson preferences
                 </h2>
                 <label>
-                  Local narration model
+                  Local writing model
                   <select
                     value={model}
-                    onChange={(e) => setModel(e.target.value)}
+                    aria-describedby="writing-model-help"
+                    onChange={(e) => {
+                      modelChosen.current = true;
+                      setModel(e.target.value);
+                    }}
                   >
+                    {model && !modelAvailable && (
+                      <option value={model} disabled>
+                        {model} (not installed)
+                      </option>
+                    )}
                     {health?.models.length ? (
                       health.models.map((m) => <option key={m}>{m}</option>)
                     ) : (
@@ -1590,6 +1898,12 @@ function App() {
                     )}
                   </select>
                 </label>
+                <p id="writing-model-help" className="writing-model-help">
+                  Choose an installed local model for writing and reviewing the
+                  script. Qwen3.5:9b is the higher-capacity option tested on
+                  this workstation. The separate voice engine controls how the
+                  script sounds.
+                </p>
                 <VoiceControls
                   health={health}
                   engine={engine}

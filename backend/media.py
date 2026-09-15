@@ -270,6 +270,7 @@ def export(project, folder, settings, cancel, progress):
     if not shutil.which('ffprobe'):
         raise ValueError('FFprobe is required to verify the generated video. Install it with FFmpeg.')
     all_cues, elapsed, segments, chapters, audio_parts = [], 0., [], [], []
+    all_transcript = []
     for index, slide in enumerate(selected):
         check(cancel)
         n = slide['number']
@@ -280,9 +281,12 @@ def export(project, folder, settings, cancel, progress):
         wav = folder/f'slide-{n}.wav'
         cues, duration = synthesize(slide['narration'], wav, settings['engine'],settings['rate'],cancel,settings.get('voice','af_heart'))
         speech_duration = duration
+        speech_blocks = [dict(cue) for cue in cues]
         cues = split_caption_cues(cues)
         # Give the visual a deliberate opening beat before the narration begins.
         lead,tail=.9,.25
+        all_transcript.extend({**block,'start':block['start']+elapsed+lead,
+                               'end':block['end']+elapsed+lead,'chapter':n} for block in speech_blocks)
         with wave.open(str(wav),'rb') as source_audio:
             parameters=source_audio.getparams()
             raw=source_audio.readframes(source_audio.getnframes())
@@ -340,5 +344,5 @@ def export(project, folder, settings, cancel, progress):
     (folder/'quality.json').write_text(json.dumps(audit,indent=2),encoding='utf-8')
     (folder/'transcript.txt').write_text('\n\n'.join(f'Slide {s["number"]}: {s["title"]}\n{s["narration"]}' for s in selected),encoding='utf-8')
     from .lesson import package
-    package(folder,project['name'],chapters,all_cues,burn_captions=settings['burn_captions'])
+    package(folder,project['name'],chapters,all_cues,burn_captions=settings['burn_captions'],transcript=all_transcript)
     return elapsed

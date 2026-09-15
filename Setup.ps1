@@ -28,5 +28,9 @@ if ($studioVoiceChoice -in @('piper', 'both')) {
     Invoke-Checked $studioPython @('-m','piper.download_voices','en_US-lessac-medium','--download-dir','models')
 }
 Write-Host 'Install PowerPoint, FFmpeg/ffprobe, and a local Ollama model separately if missing.'
+Write-Host 'OCR models are bundled in the pinned RapidOCR dependency. This step copies and verifies them locally.'
+if ((Read-Host 'Prepare offline OCR for image-only slides? Type yes') -eq 'yes') {
+    Invoke-Checked $studioPython @('scripts\download_ocr.py')
+}
 Write-Host 'Use Preview voice in Setup or Export to audition a fixed sample. Project audio still requires slide approval.'
 Write-Host 'Start the studio with .\Start.ps1. Check runtime readiness in Setup & preferences.' -ForegroundColor Green

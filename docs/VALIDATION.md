@@ -2,7 +2,7 @@
 
 ## Environment
 
-Windows workstation, Python 3.13, Node 24, React/TypeScript/Vite, installed Microsoft PowerPoint, FFmpeg, Kokoro English narrator assets, optional Piper English Lessac medium, local Ollama qwen3:4b.
+Windows workstation, Python 3.13, Node 24, React/TypeScript/Vite, installed Microsoft PowerPoint, FFmpeg, Kokoro English narrator assets, optional Piper English Lessac medium, local Ollama qwen3:4b and qwen3.5:9b.
 
 ## Current revision — 2026-09-15
 
@@ -10,13 +10,23 @@ Windows workstation, Python 3.13, Node 24, React/TypeScript/Vite, installed Micr
 - Implemented controls: Kokoro voice auditions use a fixed nonmedical sample; no project narration is submitted for audition. Export review remains separate.
 - Source-region authoring uses normalized image coordinates, 2–100% width/height, 24% initial dimensions, up to six regions, and labels up to 120 characters. Overlay rectangles are clipped to the actual contained source image.
 - Whiteboard progressively reveals authored regions; Studio uses the full slide with callouts. Subtitle boundaries are estimated from speech durations, not forced-aligned words.
-- **115 automated tests passed** on Windows. Coverage includes real FFmpeg frame timing, source-region clipping and preservation, cancellation, complete long-label rendering, title extraction, subtitle layout, duplicate-caption prevention, fixed-script auditions, cache integrity, and approval invalidation when regions change. Two dependency deprecation warnings remain in the test client.
+- **184 automated tests passed** in the final Windows regression run, with two dependency deprecation warnings. Coverage includes cancellation between writing passes, incomplete model responses, atomic OCR/draft updates, equivalent spoken ranges, source review invalidation, complete reading passages versus short captions, real FFmpeg frame timing, source-region preservation, and export review gates.
 - The three-slide diagram fixture completed real PowerPoint rendering, Kokoro speech, and both Whiteboard and Studio video exports. Each output has H.264 1920×1080 video, AAC audio, and a selectable subtitle stream. Audio and video durations both equal **38.875 seconds**.
 - Visual inspection found and corrected low caption contrast on the white canvas. Long authored labels now fit in full. Additional native captions default off when the video already contains permanent captions.
 - Browser inspection confirmed the redesigned studio, local runtime readiness, and a real fixed-script voice preview. The browser decoded the 16.349-second WAV with readyState 4 and no media error; attempting playback subsequently crashed the embedded browser. End-user audio-device playback in a standalone browser remains to be confirmed.
 - Direct `file://` launch of the lesson could not be tested because the browser tool blocks local-file URLs. No workaround was used. Earlier localhost interactive checks and current caption/package tests are recorded separately from this unverified launch mode.
 - Live API validation passed through synthetic upload, rendering, region/script edits, named approval, Kokoro export, and downloads. ZIP CRCs, unique safe paths, the identical packaged MP4, settings, reviewed cues, chapter titles, quality metadata, and the final knowledge check were verified. A retained software demo is available in the studio; no clinical approvals were added.
 - Browser inspection confirmed the retained demo's source-region coordinates, labels, region-size controls, review status, and generated export links.
+
+## Additional source and narration checks — 2026-09-15
+
+- Offline OCR processed all **60 slides** of the supplied notes deck in **61.7 seconds**, extracting **752 lines**. **47 lines across 36 slides** scored below 0.9 confidence. There were **165 numeric lines across 31 slides**, including **two low-confidence numeric lines**. Confidence scores identify material to inspect; they do not establish transcription accuracy or medical correctness. This evaluation did **not mutate the project database** or add review decisions.
+- Real drafting comparisons used supplied slides **4, 6, and 13** with **qwen3:4b** and **qwen3.5:9b**. Inspection found omissions and changed qualifiers. The 9B model retained many size values, but the comparison was **not a clinical fidelity pass**. A larger model does not remove the need to compare every claim, condition, and quantity with the source.
+- A reasoning-enabled trial reached the output cap without a usable final draft. Thinking mode was disabled for narration calls after that failure; a syntactically successful response alone is insufficient evidence of a usable explanation.
+- The learner reading pane now uses complete speech-block paragraphs, separate from short subtitle cues. Typography, active highlighting, literal search highlighting, and navigation to the current passage were updated. Inline JavaScript and static offline-resource checks passed, and the focused lesson suite passed **eight tests**. This focused result is not the total application test count.
+- Browser inspection confirmed the supplied deck's slide 6 OCR action, disabled controls while processing, detected source text and quantities, and unchecked transcription status. The revised multi-paragraph script and explicit Codex editorial provenance are visible in the editor; clinical approval remains disabled. This is a focused authoring check, not a full browser acceptance or accessibility audit. The exported learner's local-file launch remains unverified as described above.
+- A refreshed synthetic export through the real API has matching audio/video duration of **38.875 seconds**, with **H.264 video and AAC audio**. This is a software fixture result, not an approved medical lesson or evidence that narration preserves every clinical detail.
+- Codex editorial corrections were saved locally for slides 4, 6, and 13 after comparing the source images and notes. They are labelled separately from local-model results. Slide 6's listed numeric values/units were retained; slide 4's unresolved glove/drape scope differences and slide 13's undefined abbreviation/timing item were explicitly flagged. These drafts do not establish clinical approval or a general local-writer quality pass. The private before/after report stays in ignored `data/validation/revised-slide-narration.md`.
 
 ## Earlier baseline checks
 

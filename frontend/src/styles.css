@@ -4023,3 +4023,149 @@ input[type="range"] {
     margin-left: 28px;
   }
 }
+
+/* Spoken-delivery authoring guidance. */
+.spoken-editing-guide {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  border: 1px solid #493b55;
+  border-radius: 8px;
+  background: #221e2c;
+  padding: 12px;
+  margin: 12px 0 17px;
+}
+.spoken-editing-guide > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.spoken-editing-guide strong {
+  font-size: 20px;
+  font-weight: 550;
+  color: #ddc4f3;
+}
+.spoken-editing-guide span {
+  font-size: 10px;
+  color: #bba9cc;
+  line-height: 1.5;
+}
+.spoken-editing-guide p {
+  grid-column: 1/-1;
+  font-size: 11px;
+  color: #b9a6c8;
+  line-height: 1.7;
+  margin: 2px 0 0;
+}
+.narration-delivery-label {
+  font-size: 12px;
+  color: #d3bfdf;
+}
+.narration-delivery-label select {
+  font-size: 12px;
+}
+.narration-delivery-help,
+.source-draft-help {
+  font-size: 11px;
+  color: #bdadcb;
+  line-height: 1.7;
+  margin: 9px 0 13px;
+}
+.draft-tools .secondary {
+  white-space: normal;
+  text-align: left;
+  line-height: 1.5;
+}
+
+/* Editable visual source with explicit transcription review. */
+.source-content.source-image-content {
+  max-height: none;
+  white-space: normal;
+}
+.image-text-editor {
+  padding: 0;
+  border: 0;
+  margin: 0;
+  min-width: 0;
+}
+.image-text-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.image-text-heading strong {
+  font-size: 13px;
+  color: #e1ceef;
+}
+.image-text-heading > span {
+  font-size: 11px;
+  color: #d9bf93;
+}
+.image-text-editor > p {
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 12px 0;
+  color: #baadca;
+}
+.image-text-editor > label:not(.checkbox-label) {
+  margin-top: 18px;
+  font-size: 12px;
+  color: #d0bbdf;
+}
+.image-text-editor textarea {
+  font-size: 14px;
+  line-height: 1.8;
+  min-height: 230px;
+  resize: vertical;
+}
+.image-text-editor .image-text-hint {
+  font-size: 11px;
+  color: #b8a8c8;
+}
+.image-text-editor .checkbox-label {
+  font-size: 12px;
+}
+.image-text-editor .button {
+  white-space: normal;
+}
+
+.ocr-candidate {
+  margin: 15px 0;
+  padding: 12px;
+  border: 1px solid #53435d;
+  border-radius: 8px;
+  background: #241f2f;
+}
+.ocr-candidate summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #d9beec;
+}
+.ocr-candidate textarea {
+  margin: 12px 0;
+  min-height: 150px;
+  font-size: 13px;
+}
+.ocr-candidate textarea[readonly] {
+  color: #bfb0ce;
+  background: #191620;
+}
+
+.draft-progress {
+  padding: 12px;
+  border: 1px solid #695079;
+  border-radius: 8px;
+  background: #30253f;
+  color: #dac4eb;
+  font-size: 12px;
+  line-height: 1.75;
+  margin: 12px 0;
+}
+.writing-model-help {
+  font-size: 12px;
+  line-height: 1.75;
+  color: #c1afcd;
+  margin: -6px 0 22px;
+}

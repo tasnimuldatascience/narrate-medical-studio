@@ -121,10 +121,11 @@ def health():
                 powerpoint=True
         except OSError:
             pass
+    from . import ocr
     return {'offline':True,'models':models,'ollama_error':ollama_error,'ffmpeg':bool(shutil.which('ffmpeg') and shutil.which('ffprobe')),
         'renderer':powerpoint or bool(os.environ.get('NARRATE_SOFFICE') or shutil.which('soffice')),
         'renderer_name':'Microsoft PowerPoint' if powerpoint else 'LibreOffice',
-        'piper':media.voice_path().is_file(),'kokoro':voice.available(),'windows_voice':os.name=='nt','data_path':str(store.DATA),
+        'piper':media.voice_path().is_file(),'kokoro':voice.available(),'ocr':ocr.available(),'windows_voice':os.name=='nt','data_path':str(store.DATA),
         'version':'0.1.0'}
 
 @app.get('/api/projects')
@@ -219,6 +220,9 @@ def edit_slide(project_id:str,number:int,body:SlideEdit):
             raise HTTPException(400,'A knowledge check needs three distinct, nonempty choices.')
         prior_cues=[VisualCue.model_validate(c).model_dump() for c in slide.get('visual_cues',[])]
         if slide['narration']!=body.narration or slide.get('knowledge')!=knowledge or prior_cues!=visual_cues:
+            if slide['narration']!=body.narration:
+                slide['narration_quality']=None
+                slide['ai_flags']=['Narration was edited. Previous draft diagnostics no longer apply; compare this revision with all source material.']
             slide.update(narration=body.narration,revision=slide['revision']+1,approved=False,reviewer='',approved_at=None,draft_origin='reviewer edit')
             slide['knowledge']=knowledge
             slide['visual_cues']=visual_cues
@@ -229,6 +233,48 @@ class Approval(BaseModel):
     revision:int=Field(ge=1)
     reviewer:str=Field(min_length=2,max_length=100)
     acknowledged:bool
+
+
+class SourceEdit(BaseModel):
+    revision:int=Field(ge=1)
+    visual_text:str=Field(max_length=18000)
+    source_reviewed:bool=False
+
+
+@app.put('/api/projects/{project_id}/slides/{number}/source')
+def edit_source(project_id:str,number:int,body:SourceEdit):
+    with store.edit(project_id) as p:
+        idle(p)
+        s=get_slide(p,number)
+        if s['revision']!=body.revision:
+            raise HTTPException(409,'This slide changed. Reload before saving its source text.')
+        if body.source_reviewed and not body.visual_text.strip():
+            raise HTTPException(400,'Add a transcription before marking it checked.')
+        if s.get('visual_text','')!=body.visual_text or s.get('source_reviewed',False)!=body.source_reviewed:
+            s.update(visual_text=body.visual_text,source_reviewed=body.source_reviewed,
+                revision=s['revision']+1,approved=False,reviewer='',approved_at=None,narration_quality=None)
+            s['ai_flags']=list(dict.fromkeys(s.get('ai_flags',[])+['Source transcription changed. Review or regenerate the narration against this source.']))
+            store.event(p,'source_edited',f'Slide {number}; image text checked: {body.source_reviewed}; narration approval reset.')
+    return store.get(project_id)
+
+
+@app.post('/api/projects/{project_id}/slides/{number}/ocr')
+def read_image_text(project_id:str,number:int):
+    folder=store.directory(project_id)
+    get_slide(store.get(project_id),number)
+    def operation(cancel):
+        from . import ocr
+        result=ocr.extract_text(folder/'slides'/f'slide-{number}.png',cancel)
+        media.check(cancel)
+        with store.edit(project_id) as p:
+            s=get_slide(p,number)
+            s['ocr']=result
+            # Existing edited text is retained; OCR supplies a separate candidate.
+            if not s.get('visual_text','').strip():
+                s.update(visual_text=result['text'],source_reviewed=False,revision=s['revision']+1,
+                    approved=False,reviewer='',approved_at=None,narration_quality=None)
+            store.event(p,'image_text_detected',f'Slide {number}; local OCR candidate requires visual verification.')
+    return submit(project_id,'ocr',operation)
 
 @app.post('/api/projects/{project_id}/slides/{number}/approve')
 def approve(project_id:str,number:int,body:Approval):
@@ -241,6 +287,8 @@ def approve(project_id:str,number:int,body:Approval):
             raise HTTPException(400,'A named reviewer must confirm the narration and source checks.')
         if not s['image']:
             raise HTTPException(400,'Render and inspect the slide before approval.')
+        if s.get('visual_text','').strip() and not s.get('source_reviewed',False):
+            raise HTTPException(400,'Check the image transcription against the slide before approving narration.')
         s.update(approved=True,reviewer=body.reviewer.strip(),approved_at=store.now())
         store.event(p,'approved',f'Slide {number} revision {s["revision"]}, reviewer: {s["reviewer"]}')
     return store.get(project_id)
@@ -259,18 +307,31 @@ def render(project_id:str):
 
 class DraftRequest(BaseModel):
     model:str=Field(max_length=120)
+    style:Literal['conversational','concise']='conversational'
 
 @app.post('/api/projects/{project_id}/slides/{number}/draft')
 def draft(project_id:str,number:int,body:DraftRequest):
     def operation(cancel):
         p=store.get(project_id)
-        result=narration.generate(get_slide(p,number),body.model,p['audience'])
+        source_slide=dict(get_slide(p,number))
+        detected=None
+        if source_slide.get('image') and not source_slide.get('text','').strip() and not source_slide.get('visual_text','').strip():
+            from . import ocr
+            if not ocr.available():
+                raise ValueError('This slide stores its text in an image. Set up offline OCR or add the visible text under Source > Image text before drafting.')
+            detected=ocr.extract_text(store.directory(project_id)/'slides'/f'slide-{number}.png',cancel)
+            source_slide.update(visual_text=detected['text'],source_reviewed=False)
+        result=narration.generate(source_slide,body.model,p['audience'],style=body.style,cancel=cancel)
         media.check(cancel)
         with store.edit(project_id) as p:
             s=get_slide(p,number)
+            if detected is not None:
+                s.update(ocr=detected,visual_text=detected['text'],source_reviewed=False)
+                store.event(p,'image_text_detected',f'Slide {number}; automatically included local OCR in drafting; requires visual verification.')
             s.update(narration=result.narration,revision=s['revision']+1,approved=False,approved_at=None,reviewer='',draft_origin=f'Local AI · {body.model}')
             s['ai_flags']=result.review_flags
-            store.event(p,'ai_draft',f'Slide {number}; {body.model}; prompt {narration.PROMPT_VERSION}')
+            s['narration_quality']=result.quality
+            store.event(p,'ai_draft',f'Slide {number}; {body.model}; {body.style}; prompt {narration.PROMPT_VERSION}')
     get_slide(store.get(project_id),number)
     return submit(project_id,'draft',operation)
 
@@ -334,7 +395,8 @@ def export(project_id:str,body:ExportRequest):
             'source_sha256':snapshot['source_sha256'],
             'quality':json.loads((folder/'quality.json').read_text(encoding='utf-8')),
             'slides':[{**{k:s[k] for k in ('number','narration','revision','reviewer','approved_at')},
-                'knowledge':s.get('knowledge'),'visual_cues':s.get('visual_cues',[]),'sources':s['sources']}
+                'knowledge':s.get('knowledge'),'visual_cues':s.get('visual_cues',[]),'sources':s['sources'],
+                'visual_text':s.get('visual_text',''),'source_reviewed':s.get('source_reviewed',False)}
                 for s in snapshot['slides'][body.start-1:body.end]]}
         (folder/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
         with zipfile.ZipFile(folder/'interactive-lesson.zip','a') as bundle:
