@@ -33,6 +33,12 @@ Revision selection now retains the original candidate if a proposed rewrite intr
 
 A single bounded critic repair attempt was then tested live. Both initial and repair responses altered an evidence quotation, so the full automatic draft workflow failed closed again. Private raw attempts are retained for diagnosis. The separate saved-script assessment did complete through the live API at revision 4, after three authored paragraph-linked cues were saved; narration wording and its editorial origin remained unchanged. This establishes the API path, not critic reliability.
 
+### Editor preview integration
+
+The real `POST .../slides/6/preview` job completed with Qwen Aiden/engaging, one full-script model session, and three authored paragraph assignments. It registered a **67.666667-second** private MP4 for revision 4. The second model run took **155.961 seconds** for load/generation, with the same **4462.3 MiB** peak allocation. The embedded editor video loaded with `readyState=4`, the expected duration, and no media error. Device audio playback and human listening quality are separate from this metadata/load check.
+
+The final app sample is under `data/12f15532d19743ffb14ab4a5d77e718f/draft-previews/5bf59e2cbfb54f7e90e0cf05a63cd3c4/`. Its URL is available in slide 6's **Hear it. See it. Refine it.** panel. It remains unapproved; generating it did not grant approval or create a released lesson export.
+
 ## Environment
 
 Windows workstation, Python 3.13, Node 24, React/TypeScript/Vite, installed Microsoft PowerPoint, FFmpeg, Kokoro English narrator assets, optional Piper English Lessac medium, local Ollama qwen3:4b and qwen3.5:9b.

@@ -1601,25 +1601,6 @@ function App() {
                         " Choose an installed local writing model in Setup & preferences to draft."}
                     </p>
                     <p className="origin">Source: {slide.draft_origin}</p>
-                    <ScriptEvaluationPanel
-                      slide={slide}
-                      edited={sourceDirty || script !== slide.narration}
-                      disabled={
-                        dirty ||
-                        loading ||
-                        busy(project) ||
-                        !modelAvailable ||
-                        !script.trim()
-                      }
-                      evaluating={evaluating}
-                      modelAvailable={modelAvailable}
-                      dirty={dirty}
-                      onEvaluate={() =>
-                        void action(`/slides/${slide.number}/evaluate`, {
-                          model,
-                        })
-                      }
-                    />
                     <section
                       className="draft-preview-panel"
                       aria-label="Private slide preview"
@@ -1703,6 +1684,25 @@ function App() {
                         </>
                       )}
                     </section>
+                    <ScriptEvaluationPanel
+                      slide={slide}
+                      edited={sourceDirty || script !== slide.narration}
+                      disabled={
+                        dirty ||
+                        loading ||
+                        busy(project) ||
+                        !modelAvailable ||
+                        !script.trim()
+                      }
+                      evaluating={evaluating}
+                      modelAvailable={modelAvailable}
+                      dirty={dirty}
+                      onEvaluate={() =>
+                        void action(`/slides/${slide.number}/evaluate`, {
+                          model,
+                        })
+                      }
+                    />
                   </>
                 ) : editorTab === "visual" ? (
                   <VisualStoryEditor
@@ -2661,7 +2661,7 @@ function ScriptEvaluationPanel({
             <ol className="evaluation-findings">
               {findings.map((finding, index) => (
                 <li key={finding.id || index}>
-                  <details open={finding.severity === "high"}>
+                  <details>
                     <summary>
                       <span
                         className={`finding-severity ${finding.severity === "high" ? "high" : ""}`}
