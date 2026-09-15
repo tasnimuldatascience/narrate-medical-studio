@@ -381,7 +381,9 @@ def test_wire_difference_is_challenged_before_becoming_a_finding(monkeypatch):
                                  'comparison':'Meaning retained'}]})
         assert payload['proposals'][0]['type']=='changed'
         assert payload['proposals'][0]['reason']=='Unit differs'
-        return schema.model_validate({'verdicts':verdict(payload,'uncertain')})
+        return schema.model_validate({'verdicts':[dict(proposal_id=p['id'],
+            source_ids=p['source_ids'],draft_ids=p['draft_ids'],outcome='Comparison uncertain')
+            for p in payload['proposals']]})
     monkeypatch.setattr(ev,'local_json',local)
     result=review.run(ev,evidence,script,'local:model','learner')
     assert calls==[review.ALIGN_SYSTEM,review.BLIND_SYSTEM,review.VERIFY_SYSTEM]
@@ -406,17 +408,36 @@ def test_runtime_verifier_references_are_bound_to_actual_proposals(key,value):
     source,draft,proposals,valid=verification_fixture()
     schema=review.verification_schema(source,draft,proposals)
     assert issubclass(schema,review.Verification)
+    valid.pop('reason');valid.pop('decision');valid['outcome']='Discrepancy demonstrated'
     schema.model_validate({'verdicts':[valid]})
     valid[key]=value
     with pytest.raises(ValueError,match='Input should be'):
         schema.model_validate({'verdicts':[valid]})
 
 
-def test_runtime_verifier_bounds_reason_and_coverage_without_truncation():
+def test_runtime_verifier_rejects_redundant_verdict_fields_and_empty_coverage():
     source,draft,proposals,valid=verification_fixture()
     schema=review.verification_schema(source,draft,proposals)
-    valid['reason']='x'*601
-    with pytest.raises(ValueError,match='at most 600'):
+    valid['outcome']='Discrepancy demonstrated'
+    valid['decision']='refuted'
+    with pytest.raises(ValueError,match='Extra inputs are not permitted'):
         schema.model_validate({'verdicts':[valid]})
-    assert len(valid['reason'])==601
+    assert valid['decision']=='refuted'
     with pytest.raises(ValueError):schema.model_validate({'verdicts':[]})
+
+
+def test_single_verification_outcome_has_one_unambiguous_domain_verdict():
+    source,draft,proposals,valid=verification_fixture()
+    valid.pop('reason');valid.pop('decision')
+    schema=review.verification_schema(source,draft,proposals)
+    properties=ev.transport_schema(schema)['$defs']['BoundVerdict']['properties']
+    assert 'decision' not in properties and 'reason' not in properties
+    assert list(properties)[-1]=='outcome'
+    for outcome,(decision,reason) in review.VERIFICATION_OUTCOMES.items():
+        assert outcome in review.VERIFY_SYSTEM
+        valid['outcome']=outcome
+        parsed=review.domain_verification(schema.model_validate({'verdicts':[valid]}))
+        assert parsed.verdicts[0].decision==decision and parsed.verdicts[0].reason==reason
+        review.validate_verification(parsed,proposals,source,draft)
+    valid['outcome']='Unknown outcome'
+    with pytest.raises(ValueError):schema.model_validate({'verdicts':[valid]})

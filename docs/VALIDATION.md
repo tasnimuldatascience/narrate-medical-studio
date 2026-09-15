@@ -2,11 +2,11 @@
 
 ## Evidence-addressed evaluator update — 2026-09-15
 
-**86 focused evidence-review/evaluation tests passed.** These are mocked and deterministic protocol tests, not measured model accuracy. They cover exact passage offsets, complete/unique coverage, invalid IDs, preserved verifier anchors and conflict sides, evidence-backed refutations, uncertainty, unit case, negation/quantity examples, blind-pass independence, bounded repair, cancellation, and rejection of oversized context before model access.
+**87 focused evidence-review/evaluation tests passed.** These are mocked and deterministic protocol tests, not measured model accuracy. They cover exact passage offsets, complete/unique coverage, invalid IDs, preserved verifier anchors and conflict sides, evidence-backed refutations, uncertainty, unit case, negation/quantity examples, blind-pass independence, bounded repair, cancellation, and rejection of oversized context before model access.
 
 The current protocol replaces model-written quotations with stored source/script passage IDs. Two independent complete alignments precede a challenge to proposed discrepancies. Reports separate potential findings, uncertainty, refutations and lexical/readability hints. Evaluator code, source/script hashes and model identity bind the result. The evaluator cannot trigger medical revisions or grant clinical approval. Its exact-text guard normalizes whitespace only; a byte-based context budget reserves response room rather than allowing source truncation.
 
-The v4 corrected supplied-script case completed in 98.08 seconds: zero critic findings, zero unresolved comparisons, and no validation repair. The deliberate changed-value case reached challenge review but its local runtime returned HTTP500 after a model-start timeout during a long host interruption; it has no accepted result. Remaining development cases are pending. This is a development regression dataset, not clinician-labeled held-out validation or production readiness. Expected discrepancy labels are compared after inference and never supplied to the reviewer.
+The final v5 focused live check completed the corrected script and deliberately altered gauge case in about 106 and 126 seconds. The corrected script had no critic findings or uncertainty; the altered gauge was detected. Manual inspection also found four false extra allegations on unchanged syringe quantities. Thus 2/2 target matches is not a reliability pass. Remaining cases were cancelled to avoid further unbounded tuning. The evaluator remains an unvalidated review aid, cannot rewrite medical content automatically, and cannot grant clinical approval.
 
 To repeat a development experiment using a private JSON dataset:
 
@@ -19,6 +19,10 @@ Case reports and `summary.json` stay local. Matching source/script/model/code fi
 The alignment wire format uses one comparison category per passage; code derives the displayed status from that single choice. Separate model-authored reason/status pairs are forbidden because live trials produced contradictory pairs. Exact evidence IDs and complete coverage remain required.
 
 The Qwen adjacent-block batch-2 benchmark reduced generation from 47.85 to 31.71 seconds for two supplied-deck passages (34% less wall time), with peak allocation increasing from 4380 to 4768 MiB. This small timing comparison is not a pronunciation or naturalness assessment. The adapter preserves ordered measured cues, checks output counts, and invalidates serial caches. 28 voice tests and 32 workflow/API/lesson tests passed.
+
+## Complete supplied-deck lecture export
+
+All 60 slides were rendered into a 2831.625-second (47 minute 12 second) private draft lecture with Qwen Aiden engaging narration, source-region motion, burned and selectable captions, complete transcript, 60 chapters and 8 knowledge checks. FFprobe verified matching 1080p H.264/AAC durations. Narration generation took 96.22 minutes on the local 8 GB GPU, peaking at 5093.4 MiB allocated memory. The 137.3 MB MP4 and 137.8 MB offline interactive ZIP remain in ignored data/validation/full-lecture/lecture-qwen-aiden. Permanent draft banners and source-conflict flags remain; no clinical approval was added.
 
 ## Expressive voice, editorial roles and animation milestone — 2026-09-15
 
