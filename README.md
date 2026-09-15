@@ -87,6 +87,16 @@ Subtitle boundaries are estimated from synthesized speech-block durations. They 
 
 Supplied medical examples intentionally have **no automatic clinical approval**. The nonclinical three-slide demonstration in `data/validation` is a software test fixture.
 
+### Private draft video samples
+
+For an explicitly requested review sample, `scripts/render_draft_preview.py` creates a single-slide video with a permanent **UNAPPROVED / FOR REVIEW ONLY** banner. It uses the saved draft, local Kokoro, and optionally author-supplied source regions timed to paragraph boundaries. It leaves project records and approvals unchanged and does not create a released lesson package. The normal reviewed-export gate still applies to clinical distribution.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\render_draft_preview.py --project-id PROJECT_ID --slide 6
+```
+
+The sample, draft transcript, source hash, and review flags stay under ignored `data/validation/`. This is a private preview, not evidence that the narration has been medically approved.
+
 ## Development and checks
 
 ```powershell

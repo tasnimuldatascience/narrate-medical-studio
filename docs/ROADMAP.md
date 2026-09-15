@@ -10,12 +10,12 @@ The working release proves the workstation workflow. A professional medical educ
 - Whiteboard progressively reveals authored source regions and ends with the original slide. Studio retains the full source with timed callouts. No-cue slides retain their full visual.
 - Caption timing estimated from generated block duration. This is not forced alignment.
 
-These capabilities animate reviewed source material. They do not establish reference-video equivalence, generated anatomical motion, clinical validity, or production certification. Updated end-to-end fixture results are pending in `VALIDATION.md`.
+These capabilities animate source material. They do not establish reference-video equivalence, generated anatomical motion, clinical validity, or production certification. End-to-end fixture results and an explicitly requested, permanently watermarked private draft preview are recorded in `VALIDATION.md`.
 
 ## Clinical content and narration
 
 - Build a permission-cleared evaluation corpus spanning specialties, notes-heavy slides, tables, units, multilingual text, images, and conflicting information. Measure omitted claims, added claims, quantity preservation, abbreviation handling, and reviewer correction rate.
-- Add OCR and local visual models with source-region citations. Treat OCR as uncertain extracted text, never authoritative medical transcription. Acceptance: every generated factual claim can be traced to a visible source, and unclear source regions are flagged.
+- Offline OCR is implemented. Add local visual analysis and claim-level source-region citations. Treat OCR as uncertain extracted text, never authoritative medical transcription. Acceptance: every generated factual claim can be traced to a visible source, and unclear source regions are flagged.
 - Add a versioned pronunciation dictionary with audio previews, reviewer-approved phonetics, and per-project overrides. Benchmark common drugs, anatomy, and acronyms with educators.
 - Evaluate the implemented paragraph-block delivery across medical terminology and long passages. Add tested forced alignment if precise word/phrase synchronization is required; evaluate intelligibility, pacing, caption accuracy, and retained meaning separately.
 
@@ -40,7 +40,7 @@ These capabilities animate reviewed source material. They do not establish refer
 1. All required runtime checks and automated tests pass with pinned dependencies.
 2. Every declared file type and target platform passes a documented compatibility suite.
 3. Independent educators review a representative set of clinical lessons and report acceptable error/omission rates.
-4. No unreviewed revision can reach published audio or a learner assessment.
+4. No unreviewed revision can reach published audio or a learner assessment. Explicitly requested private draft previews must carry a permanent unapproved label and cannot grant or imply clinical approval.
 5. Offline behavior is verified under network denial, including external renderers and local model runtimes.
 6. Critical authoring and learner tasks pass keyboard and screen-reader testing, with measured WCAG contrast.
 7. A fresh-machine install and recovery from interrupted jobs are demonstrated.

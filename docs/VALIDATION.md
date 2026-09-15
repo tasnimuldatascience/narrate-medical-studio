@@ -28,6 +28,13 @@ Windows workstation, Python 3.13, Node 24, React/TypeScript/Vite, installed Micr
 - A refreshed synthetic export through the real API has matching audio/video duration of **38.875 seconds**, with **H.264 video and AAC audio**. This is a software fixture result, not an approved medical lesson or evidence that narration preserves every clinical detail.
 - Codex editorial corrections were saved locally for slides 4, 6, and 13 after comparing the source images and notes. They are labelled separately from local-model results. Slide 6's listed numeric values/units were retained; slide 4's unresolved glove/drape scope differences and slide 13's undefined abbreviation/timing item were explicitly flagged. These drafts do not establish clinical approval or a general local-writer quality pass. The private before/after report stays in ignored `data/validation/revised-slide-narration.md`.
 
+## Requested source-PPT draft preview — 2026-09-15
+
+- Created a private preview from the actual supplied deck's slide 6 and its saved Codex editorial draft. Kokoro `af_bella` at 0.97 pace produced a **72.5-second** 1920×1080 H.264/AAC video with captions. FFprobe confirmed matching video/audio duration.
+- Author-selected source text regions change at measured paragraph boundaries. The full source remains visible. This is source highlighting, not generated procedural or anatomical animation.
+- Inspected intermediate frames for source readability, captions, region placement, and the permanent **UNAPPROVED / FOR REVIEW ONLY** banner. Corrected a header overlap. Automated checks verify the banner cannot change its input image and stays present when applied repeatedly.
+- Project approvals were not changed; the video is a separate private review artifact in ignored `data/validation/`. The reviewed clinical exporter remains gated. This test does not establish clinical accuracy, medical pronunciation quality, or learner comprehension.
+
 ## Earlier baseline checks
 
 The following results were recorded before the current Kokoro and authored-region/Whiteboard revision:
