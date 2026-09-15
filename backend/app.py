@@ -138,7 +138,34 @@ def projects():
 
 @app.get('/api/projects/{project_id}')
 def project(project_id:str):
-    return store.get(project_id)
+    # store.get returns a freshly decoded response object; decoration is never persisted.
+    p=store.get(project_id)
+    reports=[s for s in p['slides'] if isinstance(s.get('evaluation'),dict)]
+    if not reports:
+        return p
+    from . import evaluation
+    fingerprint=evaluation.runtime_fingerprint()
+    for slide in reports:
+        report=slide['evaluation']
+        reasons=[]
+        if report.get('version')!=evaluation.VERSION:
+            reasons.append('The assessment protocol has changed. Re-evaluate with the current method.')
+        if report.get('evaluator_fingerprint')!=fingerprint:
+            reasons.append('The local reviewer code or options have changed since this assessment.')
+        if report.get('audience')!=p.get('audience','Medical practitioners'):
+            reasons.append('The intended audience has changed or was not recorded in this assessment.')
+        if report.get('script_hash')!=evaluation.digest(slide.get('narration','')):
+            reasons.append('The saved script differs from the assessed script.')
+        try:
+            current_source=evaluation.build_evidence(evidence_slide(p,slide))['hash']
+            if report.get('source_hash')!=current_source:
+                reasons.append('The source material, slide image, or transcription review status has changed.')
+        except (OSError,ValueError,KeyError,TypeError):
+            reasons.append('Current source evidence could not be checked. Re-evaluate after checking the source.')
+        # Model identity remains historical; project polling must not contact Ollama.
+        report['stale']=bool(reasons)
+        report['stale_reasons']=reasons
+    return p
 
 @app.post('/api/projects',status_code=201)
 async def upload(file:UploadFile=File(...)):

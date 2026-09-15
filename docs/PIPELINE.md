@@ -12,8 +12,8 @@ flowchart TD
     C --> E[Hash original source evidence]
     P --> E
     E --> T[Local teacher: draft and spoken edit]
-    T --> Q[Separate source critic and validated evidence quotes]
-    Q --> R[At most one revision and re-audit]
+    T --> Q[Two independent complete source and draft alignments]
+    Q --> R[Challenge proposals using stored evidence passages]
     D --> F[Practitioner edits the lesson]
     R --> F
     F --> G[Author source regions and knowledge checks]
@@ -30,9 +30,9 @@ flowchart TD
 
 **Create slide preview** runs the saved source/script through a private, permanently watermarked video job before clinical approval. It stores only a revision-bound preview record and never changes narration, source review or approval. The API exposes only successfully verified, registered MP4 previews; incomplete jobs and arbitrary project files are not downloadable. This path does not create a released lesson ZIP.
 
-The editor's **Build teaching draft** explicitly selects the multi-role workflow. The API retains its legacy two-pass default for older clients; pass `workflow: "agents"` for the checkpointed workflow. **Evaluate script** assesses the current saved script without rewriting it or changing approval. Evaluation requires visible image text for image-only slides. Exact evidence quotations are checked before findings can be saved. Empty findings mean “needs review,” never “clinically passed.” Source/script edits invalidate assessments.
+The editor's **Build teaching draft** explicitly selects the multi-role workflow. The API retains its legacy two-pass default for older clients; pass `workflow: "agents"` for the checkpointed workflow. **Evaluate script** assesses the current saved script without rewriting it or changing approval. Evaluation requires visible image text for image-only slides. Models cite exact stored source/draft passage IDs; application code supplies the quotations. Empty findings mean “needs review,” never “clinically passed.” Source/script edits invalidate assessments.
 
-Role artifacts are local JSON with atomic writes and hashed inputs under `data/<project>/agent-runs/<run>/<fingerprint>/`. Matching completed stages can resume after failure. Source/model/prompt/style changes prevent stale reuse. These are bounded editorial checkpoints, not a distributed production scheduler.
+Role artifacts are local JSON with atomic writes and hashed inputs under `data/<project>/agent-runs/<run>/<fingerprint>/`. Matching completed stages can resume after failure. Source/script hashes, revision, model identity/digest, evaluator code, prompts, options and style prevent stale reuse. These are bounded editorial checkpoints, not a distributed production scheduler.
 
 The uploaded original is retained locally. Conversion operates on a copy with macros, active embedded content, and external relationships removed. OOXML extraction reads editable text, notes, and tables. A separate optional OCR step transcribes rendered slide images; neither step interprets anatomy or checks medical validity.
 
@@ -46,7 +46,11 @@ The author supplies diagram regions, labels, narration, and any assessment. An e
 
 ## Spoken narration editing
 
-The teacher stage makes two Ollama generation calls. The first produces a spoken draft from extracted text, speaker notes, tables, and available image transcription. The second performs an editorial pass against those same sources, checking the draft's wording, qualifiers, quantities, omissions, and source disagreements while improving sentence structure. Sources and the initial draft are treated as untrusted data, not instructions. The checkpointed workflow then runs a separate source critic, with bounded revision/re-audit where appropriate. The result is a structured, unapproved narration with review flags and diagnostic information.
+The teacher stage makes two Ollama generation calls. The first produces a spoken draft from extracted text, speaker notes, tables, and available image transcription. The second performs an editorial pass against those same sources, checking wording while improving sentence structure. Sources and the initial draft are treated as untrusted data, not instructions. The checkpointed workflow then evaluates the candidate against original evidence. This later evaluation never triggers another medical rewrite.
+
+Evidence review first assigns immutable passage IDs and exact offsets. Two complete alignment passes see the entire source and draft with different instructions/seeds; neither sees the other's output. Proposed discrepancies are then challenged against the complete evidence. Unique IDs, complete coverage and the original comparison anchors must survive validation. Source conflicts retain both sides. At most one schema/reference repair is allowed per stage; malformed or incomplete review output remains a failure.
+
+Reports distinguish potential discrepancies, unresolved comparisons, refuted proposals and lexical/readability hints. The deterministic exact-text omission guard normalizes whitespace only: case-sensitive units and ambiguous range/minus notation are not equated. A conservative UTF-8 byte bound reserves input and response space in the model context, caps output tokens, and rejects insufficient room before model access. These constraints protect evidence integrity; they do not make a model's interpretation clinically correct.
 
 The current prompt version is `medical-source-v5-editor`; it is still being evaluated. An editorial pass or favorable readability score does not establish that the output preserves every fact. Authors must compare the final script with all accepted source material, especially where notes qualify or contradict visible slide text. An unresolved disagreement needs an explicit author decision, not an automatic choice of whichever wording sounds clearer.
 
@@ -58,11 +62,11 @@ Kokoro runs from pinned local ONNX and voice-bank files. Complete thoughts are s
 
 Audio duration is measured from generated PCM. Short caption boundaries are estimated proportionally within the measured speech passages; they are not forced-aligned word timestamps. Per-slide PCM is padded to video frame boundaries and joined before one AAC encode, preventing cumulative padding drift.
 
-Voicebox and Qwen TTS are not integrated. Piper and Windows speech are alternative installed engines.
+Optional Qwen3-TTS CustomVoice adds expressive local narration; see [VOICE_AND_MOTION.md](VOICE_AND_MOTION.md). Voicebox is not integrated. Piper and Windows speech are alternative installed engines.
 
 ## Visuals and interaction
 
-Whiteboard reveals the author's selected source regions in order, retaining completed regions and showing the full source at the end. Studio preserves the complete slide and adds animated callouts and chapter cards. Cue progression is evenly paced, not anchored to individual spoken phrases. Neither mode generates new medical anatomy or recreates original PowerPoint animations.
+Whiteboard reveals authored source regions and ends on the full source. Guided focus moves into those regions and returns to context. Both support uniform spacing or authored paragraph starts matched to measured speech blocks. Studio preserves the complete slide with timed callouts and chapter cards. Native PowerPoint mode renders supported existing effects separately. These modes do not generate medical anatomy or infer procedural movements.
 
 The exported learner page contains chapter navigation, searchable and seekable transcript, caption controls, playback speed, questions with explanations, and session-only reflection notes/progress. Its HTML, media, caption data, and code are packaged together without remote libraries.
 

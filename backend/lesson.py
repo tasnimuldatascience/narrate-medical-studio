@@ -12,13 +12,15 @@ def _timestamp(seconds):
     seconds, milliseconds = divmod(milliseconds, 1000)
     return f'{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}'
 
-def package(folder,title,chapters,cues,burn_captions=False,transcript=None):
+def package(folder,title,chapters,cues,burn_captions=False,transcript=None,draft_banner=False):
     folder = Path(folder)
     payload=json.dumps({'title':title,'chapters':chapters,'cues':cues,
         'transcript':transcript if transcript is not None else cues,
         'burnedCaptions':bool(burn_captions)},ensure_ascii=True).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
     template=(Path(__file__).parent/'lesson.html').read_text(encoding='utf-8')
     html=template.replace('/*LESSON_DATA*/',payload)
+    if draft_banner:
+        html=html.replace('<body>','<body><div role="note" style="position:sticky;top:0;z-index:100;padding:14px;background:#80302d;color:white;text-align:center;font-weight:700">DRAFT / UNAPPROVED / FOR PRIVATE REVIEW ONLY — source and clinical review remain outstanding.</div>',1)
     (folder/'index.html').write_text(html,encoding='utf-8')
     # A sidecar is useful in external players; the HTML also constructs its own
     # text track so captions work when opened directly with file://.
@@ -29,7 +31,8 @@ def package(folder,title,chapters,cues,burn_captions=False,transcript=None):
     (folder/'captions.vtt').write_text(vtt + '\n', encoding='utf-8')
     (folder/'README.txt').write_text(
         'Extract this entire ZIP into one folder, then open index.html in a modern browser.\n'
-        'Keep presentation.mp4 alongside index.html. No internet connection is required.\n'
+        + ('DRAFT / UNAPPROVED / FOR PRIVATE REVIEW ONLY. Source and clinical review remain outstanding.\n' if draft_banner else '')
+        + 'Keep presentation.mp4 alongside index.html. No internet connection is required.\n'
         + ('Captions are part of the video image. Additional player captions start off to avoid duplication.\n'
            if burn_captions else 'Captions start on and can be changed using the player controls.\n')
         + 'Search the transcript to revisit a passage.\n'
@@ -38,3 +41,6 @@ def package(folder,title,chapters,cues,burn_captions=False,transcript=None):
     with zipfile.ZipFile(folder/'interactive-lesson.zip','w',zipfile.ZIP_STORED) as z:
         for name in ['index.html','presentation.mp4','captions.srt','captions.vtt','transcript.txt','README.txt']:
             z.write(folder/name,name)
+        if draft_banner:
+            for name in ['manifest.json','quality.json','chapters.json','source-flags.json','provenance.json']:
+                if (folder/name).is_file():z.write(folder/name,name)

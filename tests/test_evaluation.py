@@ -6,12 +6,21 @@ import pytest
 from backend import evaluation as ev, media
 
 
+@pytest.fixture(autouse=True)
+def offline_model_identity(monkeypatch,request):
+    # The remote-alias test deliberately exercises the real resolver with a fake HTTP client.
+    if request.node.name != 'test_remote_alias_blocked_before_source_transmission':
+        monkeypatch.setattr(ev,'resolve_model',lambda model,cancel=None:{'name':model,'digest':'fixture-digest'})
+
+
 def slide(text='Many items may need 5 mL. Do not discard them.'):
     return {'number': 1, 'revision': 2, 'text': text, 'notes': '', 'tables': []}
 
 
-def empty_critic(*args, **kwargs):
-    return ev.CriticOutput(summary='No additional issue identified; practitioner review remains required.', findings=[])
+def empty_critic(model, system, payload, schema, **kwargs):
+    return schema(
+        source_checks=[dict(source_id=p['id'],comparison='Meaning retained',draft_ids=[payload['draft_passages'][0]['id']],related_source_ids=[]) for p in payload['source_passages']],
+        draft_checks=[dict(draft_id=p['id'],comparison='Meaning retained',source_ids=[payload['source_passages'][0]['id']]) for p in payload['draft_passages']])
 
 
 def test_evidence_stable_ids_and_source_changes():
@@ -31,7 +40,8 @@ def test_diagnostics_catch_quantities_qualifiers_negation_without_clinical_pass(
     assert {'many', 'may', 'not'} <= set(report['quality']['missing_source_qualifiers'])
     assert report['quality']['unsupported_numbers'] == ['10']
     assert report['quality']['unsupported_absolutes']
-    assert {'quantity', 'qualifier'} <= {f['category'] for f in report['findings']}
+    assert {'quantity', 'qualifier'} <= {f['category'] for f in report['review_hints']}
+    assert report['findings'] == []
     assert report['state'] == 'review_required'
     assert report['clinical_validation'] is False
     assert report['requires_practitioner_review'] is True
@@ -63,9 +73,8 @@ def test_fabricated_critic_evidence_rejected(monkeypatch, mutation):
     if mutation == 'draft': finding['draft_quote'] = 'Every item'
     if mutation == 'id': finding['evidence_ids'] = ['made-up']
     if mutation == 'empty': finding.update(source_quote='', draft_quote='')
-    monkeypatch.setattr(ev, 'local_json', lambda *a, **k: ev.CriticOutput(summary='Review.', findings=[finding]))
     with pytest.raises(ValueError, match='rejected'):
-        ev.evaluate(packet, 'Most items need 5 mL.', 'local:4b', 'learner')
+        ev.validate_quotes([finding], packet, 'Most items need 5 mL.')
 
 
 class Response:
@@ -120,10 +129,10 @@ def test_cancel_before_network_and_context_bound(monkeypatch):
 
 def test_critic_receives_original_source_without_teacher_reasoning(monkeypatch):
     def critic(model, system, payload, schema, **kwargs):
-        assert payload['evidence_packet']['entries'][0]['text'] == slide()['text']
-        assert payload['candidate'] == 'Most items need 5 mL.'
+        assert ' '.join(p['text'] for p in payload['source_passages']) == slide()['text']
+        assert payload['draft_passages'][0]['text'] == 'Most items need 5 mL.'
         assert 'teacher_reasoning' not in json.dumps(payload)
-        return empty_critic()
+        return empty_critic(model,system,payload,schema)
     monkeypatch.setattr(ev, 'local_json', critic)
     ev.evaluate(ev.build_evidence(slide()), 'Most items need 5 mL.', 'local:4b', 'learner')
 
@@ -133,7 +142,7 @@ def test_source_transcription_and_readability_are_distinct_findings(monkeypatch)
     text = ' '.join(['Observe'] * 30) + '.'
     packet = ev.build_evidence({**slide(text), 'visual_text': 'The source label.', 'source_reviewed': False})
     report = ev.evaluate(packet, text, 'local:4b', 'learner')
-    categories = {f['category'] for f in report['findings']}
+    categories = {f['category'] for f in report['findings'] + report['review_hints']}
     assert {'readability', 'source_fidelity'} <= categories
     transcription = next(f for f in report['findings'] if f['category'] == 'source_fidelity')
     assert transcription['source_quote'] == 'The source label.'
@@ -161,7 +170,7 @@ def test_ollama_transport_avoids_large_string_grammar_but_validates_output(monke
         ev.local_json('local:4b', 'Critic.', {}, ev.CriticOutput)
 
 
-@pytest.mark.parametrize('failure', ['quote','schema'])
+@pytest.mark.parametrize('failure', ['reference','schema'])
 def test_one_critic_validation_repair_receives_original_inputs(monkeypatch, failure):
     packet=ev.build_evidence(slide())
     calls=[]
@@ -170,18 +179,22 @@ def test_one_critic_validation_repair_receives_original_inputs(monkeypatch, fail
         if len(calls)==1:
             if failure=='schema':
                 raise ev.ModelOutputError('Bad JSON','{broken','Expected a JSON object')
-            return ev.CriticOutput(summary='Check.',findings=[dict(severity='high',category='qualifier',
-                message='Check.',source_quote='All items must',draft_quote='',
-                evidence_ids=[packet['entries'][0]['id']],remediation='Check scope.')])
-        assert system==ev.CRITIC_REPAIR_SYSTEM
-        assert payload['candidate']==slide()['text']
-        assert payload['evidence_packet']==calls[0]['evidence_packet']
-        assert payload['rejected_response'] and payload['validation_error']
-        return empty_critic()
+            valid=empty_critic(model,system,payload,schema)
+            valid.source_checks[0].source_id='invented-id'
+            return valid
+        assert system==(ev.CRITIC_SYSTEM if len(calls)==2 else ev.evidence_review.BLIND_SYSTEM)
+        assert payload['draft_passages']==calls[0]['draft_passages']
+        assert payload['source_passages']==calls[0]['source_passages']
+        if len(calls)==2:
+            assert payload['validation_error']
+        else:
+            assert 'validation_error' not in payload
+            assert payload==calls[0]
+        return empty_critic(model,system,payload,schema)
     monkeypatch.setattr(ev,'local_json',critic)
     report=ev.evaluate(packet,slide()['text'],'local:4b','learner')
-    assert len(calls)==2
-    assert report['critic_validation_attempts']==2 and report['validation_repair_used']
+    assert len(calls)==3
+    assert report['critic_validation_attempts']==3 and report['validation_repair_used']
     assert report['clinical_validation'] is False
 
 

@@ -16,6 +16,12 @@ The optional adapter requires an NVIDIA CUDA GPU and checks free memory before l
 
 Each generated WAV has measured speech-block cues and a local `.qwen.json` report with text hash, model revision, elapsed time, and peak allocated GPU memory. Subtitles estimate timing within these measured blocks. PCM inspection measures sample rate, RMS/peak level, near-clipping and long silence; it cannot certify naturalness or medical pronunciation.
 
+## Evidence review stays separate from voice
+
+Source fidelity uses exact stored passage IDs, two independent complete alignment passes, and a challenge to proposed discrepancies. Potential findings, unresolved comparisons, refuted proposals and lexical hints remain visible for practitioner decisions. Reports are bound to source/script hashes, evaluator code and model identity, with a byte-based context budget that rejects insufficient room. Case-sensitive units are preserved by the exact-text guard.
+
+This evaluator does not rewrite the script, approve medical content, or certify the spoken recording. Voice synthesis continues to receive the saved narration unchanged; measured PCM/video results in [VALIDATION.md](VALIDATION.md) remain separate evidence. The local eight-case `scripts/calibrate_evidence_review.py` experiment is development calibration, not a clinical or held-out benchmark; no result is claimed here while that run is in progress.
+
 ## Visual direction
 
 - **Guided focus:** smooth camera movement into authored regions, a hold for explanation, then a return to context. Magnification is capped at 3× and limited to keep the selected region in view. It magnifies existing pixels; small raster text may remain low resolution.

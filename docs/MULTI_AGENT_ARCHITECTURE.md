@@ -4,7 +4,7 @@
 
 An end-to-end offline system with several specialized agents is a feasible direction for this project. Agents can run sequentially on one workstation; they do not require simultaneous model instances or cloud services. However, **the current application is a working development release, not a complete multi-agent system or an industry-validated medical product**. “Google level” is an ambition, not a measurable certification. Release claims should refer to demonstrated reliability, source fidelity, usability, privacy, and deployment evidence.
 
-The editor now runs a checkpointed source analyst → teacher → source critic workflow, with at most one revision and re-audit. The source analyst is deterministic; the teacher and critic are separate local model calls with separate contracts. The critic receives original evidence and the candidate, not the teacher's private reasoning. Using the same model weights for both does not provide independent clinical validation.
+The editor runs a checkpointed source analyst → teacher → evidence review workflow. Evidence review uses two complete alignment passes that receive no output from each other, then challenges proposed discrepancies. Models select stored passage IDs; application code retrieves the exact quotations. Findings cannot trigger a medical rewrite. Separate prompts and seeds using the same weights provide independent inputs, not independent clinical validation.
 
 The first editorial milestone below is implemented. Later production gates remain a target architecture. Current behavior is described in [PIPELINE.md](PIPELINE.md); test evidence is recorded in [VALIDATION.md](VALIDATION.md), and broader work remains in [ROADMAP.md](ROADMAP.md).
 
@@ -14,8 +14,10 @@ The first editorial milestone below is implemented. Later production gates remai
 |---|---|
 | Evidence packet | Stable IDs for native text, notes, image transcription and table cells. Content/provenance hash includes original deck and rendered image hashes. Editorial revision is tracked separately. |
 | Teacher | Source-bound draft plus editorial pass; short spoken thought groups and preserved conditions, numbers, units and qualifiers. |
-| Critic | Separate schema-constrained call against original evidence. Exact source/script quotations and evidence IDs are validated; malformed or fabricated citations fail the stage. Deterministic quantity/qualifier diagnostics remain distinguishable from model findings. |
-| Bounded repair | At most one teacher revision, followed by another critic assessment. Remaining findings stay visible; agreement never grants approval. |
+| Evidence review | Two independent complete source/draft alignments, followed by a challenge to proposed discrepancies. Coverage, unique IDs, source-conflict sides and verifier anchors are validated. Quotations come from immutable stored passages, not model-written text. |
+| Review outcomes | Potential findings, unresolved comparisons, refuted proposals and lexical/readability hints remain distinct. Even model agreement is a review suggestion. Every evaluator report forbids automatic revision and clinical approval. |
+| Bounded repair | At most one schema/reference repair per review stage. Invalid output still fails after that attempt. This repairs the review response, never the medical script. |
+| Context budget | A conservative UTF-8 byte bound plus reserved overhead caps response tokens within the configured context. Insufficient room fails before model access; source is never silently shortened. Exact-text omission guards normalize whitespace only, preserving case-sensitive units. |
 | Durable stages | Atomic JSON checkpoints under a private project run directory. Model digest, source, revision, prompts, code, options and style determine reuse. Corrupt/mismatched artifacts are recomputed. Completed stage output is not committed to the slide until the workflow completes. |
 | Authoring contract | Build teaching draft or evaluate an existing script. Evaluation stores the assessed revision, findings, source/script excerpts and remediation. Text/source changes invalidate it; a failed attempt retains the prior report with a visible error. |
 | Voice boundary | Optional Qwen3-TTS 1.7B CustomVoice in an isolated CUDA process, with fixed narrator/delivery presets and verified local model assets. Ollama generation requests release model residency after a call. A single app worker serializes expensive work. |
@@ -31,7 +33,7 @@ The durable editorial checkpoints do **not** implement database-backed worker le
 | Job orchestration | One app worker plus a local model lock; project job status, cancellation tokens, startup recovery and atomic editorial stage checkpoints. | Persist normalized run/stage records, leases and restart-resumable media jobs. |
 | Persistence | `backend/store.py`: SQLite WAL transactions; each project is one JSON document. | Keep project APIs while adding normalized run, stage, artifact, review, and publication records through migrations. |
 | Source evidence | Safe rendering copy, source text/notes/tables, local OCR and author review. Editorial packets have hashes and stable evidence IDs. | Add verified claim-to-image-region links, robust reading order and source conflict resolution tools. |
-| Writing | Source-bound teacher/editor, separate critic, exact quote validation with one bounded repair, optional revision/re-audit, deterministic nonregression checks. | Calibrate against educator labels and establish acceptable false-positive/false-negative rates before relying on the critic. |
+| Writing | Source-bound teacher/editor; two independent passage alignments and proposal challenge; stored exact evidence; visible uncertainty, refutations and hints. Critic-triggered revisions are disabled. | Calibrate against educator labels and establish acceptable false-positive/false-negative rates before relying on reviewer suggestions. |
 | Review | Revision checks and named approval; source/script/quiz/region changes reset approval. Reviewer names are not authenticated signatures. | Signed review records bound to exact source, script, assessment, visual plan, and final-preview revisions. Authentication for organizational deployments. |
 | Visual output | `backend/compositor.py`, `backend/visual_cues.py`, `backend/whiteboard.py`: reviewed source-region animation, captions, full-source overview. | Visual director proposes an evidence-linked scene plan. Practitioner accepts regions and sequence; a deterministic renderer executes the accepted plan. |
 | Audio and reading | Local voice synthesis; caption estimates are separate from complete reading passages. | Versioned pronunciation decisions, tested alignment when needed, explicit timing confidence, and audio/video review tied to final artifacts. |
@@ -53,11 +55,11 @@ flowchart TD
   I[Imported source snapshot] --> S[Source analyst]
   S --> SR[Practitioner checks transcription and source conflicts]
   SR --> T[Teacher]
-  T --> C[Independent fidelity critic]
-  C --> D{Actionable unresolved findings?}
-  D -->|Bounded revision| T
-  D -->|Needs author decision| SR
-  D -->|Ready for human review| V[Visual director]
+  T --> C[Two independent complete passage alignments]
+  C --> D[Challenge proposed discrepancies]
+  D --> E[Potential findings, uncertainty, refutations and hints]
+  E -->|Source decision needed| SR
+  E --> V[Visual director]
   V --> R[Practitioner reviews script, quiz, and scene plan]
   R --> W[Render worker]
   W --> Q[Output QA]
@@ -117,7 +119,7 @@ Publish by an atomic manifest-pointer transaction after files are complete. A da
 
 - Retry transient process/startup or storage-lock errors at most twice with bounded backoff, while preserving the input fingerprint. Record each attempt.
 - Do not automatically retry unsupported input, missing runtime/assets, source contradictions, disk exhaustion, exhausted model context, or reviewer rejection. Surface a specific corrective action.
-- Permit at most one automatic teacher revision after a critic report per request. If critical findings persist, route to the practitioner. Do not run an unbounded agent debate or let a critic erase its own findings.
+- Never let a critic report trigger a medical rewrite. Route potential findings and unresolved comparisons to the practitioner. Permit at most one schema/reference repair per review stage; this does not authorize changing source or narration. Do not run an unbounded agent debate.
 - Reject malformed, empty, or truncated model output. No silent first-pass fallback, source truncation, remote-provider fallback, or model substitution.
 - On restart, recover leases and validate artifact hashes. Reuse only completed, matching checkpoints; rerun interrupted native stages in a fresh temporary directory. A failed final encode must not require repeating already verified transcription or approved speech.
 - Apply disk quotas, check available space before expensive stages, and offer explicit retention/cleanup controls. Never remove original imports, review evidence, or published artifacts merely to complete a new job.
@@ -182,7 +184,7 @@ Several prompts using the same weights do not provide independent clinical valid
 1. Stabilize the current source/OCR/review experience and retain honest model-evaluation results.
 2. Introduce durable stage and artifact records behind current APIs, with migrations and failure-injection tests.
 3. Add evidence IDs and structured claim mapping before adding more inference calls.
-4. Introduce the isolated critic and a bounded revision loop; evaluate it against the existing two-pass baseline.
+4. Calibrate the implemented independent alignment/challenge review against the earlier single-critic baseline. Keep automated medical rewriting disabled.
 5. Add proposed visual plans and independent output QA, then final-artifact review.
 6. Package and validate the fully disconnected workstation workflow before organizational rollout.
 

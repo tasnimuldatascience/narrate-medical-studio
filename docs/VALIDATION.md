@@ -1,5 +1,25 @@
 # Validation record
 
+## Evidence-addressed evaluator update — 2026-09-15
+
+**86 focused evidence-review/evaluation tests passed.** These are mocked and deterministic protocol tests, not measured model accuracy. They cover exact passage offsets, complete/unique coverage, invalid IDs, preserved verifier anchors and conflict sides, evidence-backed refutations, uncertainty, unit case, negation/quantity examples, blind-pass independence, bounded repair, cancellation, and rejection of oversized context before model access.
+
+The current protocol replaces model-written quotations with stored source/script passage IDs. Two independent complete alignments precede a challenge to proposed discrepancies. Reports separate potential findings, uncertainty, refutations and lexical/readability hints. Evaluator code, source/script hashes and model identity bind the result. The evaluator cannot trigger medical revisions or grant clinical approval. Its exact-text guard normalizes whitespace only; a byte-based context budget reserves response room rather than allowing source truncation.
+
+The v4 corrected supplied-script case completed in 98.08 seconds: zero critic findings, zero unresolved comparisons, and no validation repair. The deliberate changed-value case reached challenge review but its local runtime returned HTTP500 after a model-start timeout during a long host interruption; it has no accepted result. Remaining development cases are pending. This is a development regression dataset, not clinician-labeled held-out validation or production readiness. Expected discrepancy labels are compared after inference and never supplied to the reviewer.
+
+To repeat a development experiment using a private JSON dataset:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\calibrate_evidence_review.py --dataset <private-dataset.json> --model qwen3.5:9b --output-dir data\validation\evidence-review-development
+```
+
+Case reports and `summary.json` stay local. Matching source/script/model/code fingerprints allow completed cases to be reused. This experiment does not alter project narration or approval; positive cases require expected discrepancy kinds and exact target anchors. See the historical trials below for the failures that motivated the new protocol.
+
+The alignment wire format uses one comparison category per passage; code derives the displayed status from that single choice. Separate model-authored reason/status pairs are forbidden because live trials produced contradictory pairs. Exact evidence IDs and complete coverage remain required.
+
+The Qwen adjacent-block batch-2 benchmark reduced generation from 47.85 to 31.71 seconds for two supplied-deck passages (34% less wall time), with peak allocation increasing from 4380 to 4768 MiB. This small timing comparison is not a pronunciation or naturalness assessment. The adapter preserves ordered measured cues, checks output counts, and invalidates serial caches. 28 voice tests and 32 workflow/API/lesson tests passed.
+
 ## Expressive voice, editorial roles and animation milestone — 2026-09-15
 
 Automated verification: **314 tests passed** in the Windows development environment, with two dependency deprecation warnings. TypeScript checking, optimized frontend build, formatting and whitespace checks passed. Focused follow-up tests also cover shared paragraph-boundary parsing. Runtime model assets and Office playback are verified separately from mocked/unit contracts.
@@ -29,7 +49,7 @@ Ollama rejected a large `maxLength` constraint while initializing its JSON gramm
 
 The first successful saved-script critic call produced **false positives**, claiming omitted equipment ranges and a hemostat instruction that were already present. A full workflow trial also returned an altered source quotation and was rejected before modifying the saved script. Exact quotation validation is necessary but does not establish correctness of a finding. These trials are retained privately; they are evidence against claiming calibrated or clinically reliable self-evaluation.
 
-Revision selection now retains the original candidate if a proposed rewrite introduces new numeric, unit, qualifier or absolute-wording mismatches. Unreviewed OCR and unresolved source conflicts cannot be repaired by rewriting, so those findings alone do not trigger an automatic revision. Findings remain reviewer suggestions, with deterministic and model origins distinguished.
+At that milestone, a deterministic nonregression check retained the original candidate if a proposed rewrite introduced new numeric, unit, qualifier or absolute-wording mismatches. The current protocol supersedes that automatic revision path: critic findings never trigger medical rewriting. Unreviewed OCR and unresolved source conflicts require author decisions, and lexical hints remain separate from potential model findings.
 
 A single bounded critic repair attempt was then tested live. Both initial and repair responses altered an evidence quotation, so the full automatic draft workflow failed closed again. Private raw attempts are retained for diagnosis. The separate saved-script assessment did complete through the live API at revision 4, after three authored paragraph-linked cues were saved; narration wording and its editorial origin remained unchanged. This establishes the API path, not critic reliability.
 

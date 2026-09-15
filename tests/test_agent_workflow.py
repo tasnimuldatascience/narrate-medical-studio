@@ -72,7 +72,7 @@ def test_one_revision_then_reaudit_even_if_findings_remain(setup, monkeypatch):
     original = ev.evaluate
     def critic(*args, **kwargs):
         result = original(*args, **kwargs)
-        result['findings'] = [{'message': 'Needs a check.'}]
+        result['findings'] = [{'message': 'Needs a check.', 'auto_revision_allowed': True}]
         return result
     def revise(model, system, payload, schema, **kwargs):
         calls.append('revision')
@@ -160,7 +160,7 @@ def test_revision_new_quantity_retains_original_candidate_and_report(setup, monk
     original = ev.evaluate
     def critic(*args, **kwargs):
         result = original(*args, **kwargs)
-        result['findings'] = [{'origin':'critic','category':'readability','message':'Simplify.'}]
+        result['findings'] = [{'origin':'critic','category':'readability','message':'Simplify.','auto_revision_allowed':True}]
         return result
     monkeypatch.setattr(ev, 'evaluate', critic)
     monkeypatch.setattr(ev, 'local_json', lambda *a, **k: narration.ModelDraft(narration='Use 10 mL.',review_flags=[]))
@@ -185,3 +185,18 @@ def test_rejected_critic_raw_attempts_stay_in_private_failed_checkpoint(setup, m
     record=json.loads(next(folder.glob('*/source_critic.json')).read_text())
     assert record['status']=='failed' and record['validation_attempts']==attempts
     assert not list(folder.glob('*/result.json'))
+
+
+def test_model_agreement_never_triggers_medical_rewrite(setup, monkeypatch):
+    folder, slide, calls = setup
+    original = ev.evaluate
+    def critic(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result['findings'] = [{'origin':'critic','category':'source_fidelity','message':'Potential changed meaning.',
+            'verification':'two_pass_model_agreement','auto_revision_allowed':False}]
+        return result
+    monkeypatch.setattr(ev,'evaluate',critic)
+    monkeypatch.setattr(ev,'local_json',lambda *a,**k: pytest.fail('A model finding cannot authorize a medical edit.'))
+    result=workflow.run(slide,'local:4b','learner',run_folder=folder)
+    assert calls==['teacher','critic']
+    assert result['candidate']['narration']==slide['text']

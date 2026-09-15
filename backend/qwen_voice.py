@@ -5,6 +5,7 @@ are accepted. Importing this adapter does not import torch or occupy GPU memory.
 """
 import argparse
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -43,6 +44,17 @@ _lock=threading.Lock()
 def file_hash(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream,'sha256').hexdigest()
+
+
+def synthesis_recipe():
+    """Import-safe recipe identity; no model, torch, or GPU initialization."""
+    from . import speech_text
+    recipe={'version':2,'adjacent_block_batch_size':2,'model_revision':REVISION,'runtime_versions':RUNTIME_VERSIONS,
+        'styles':STYLES,'speech_text_code':inspect.getsource(speech_text),
+        'render_code':inspect.getsource(_render_request),
+        'seed':17,'dtype':'bfloat16','attention':'sdpa','language':'English',
+        'max_new_tokens':1024,'non_streaming_mode':True,'gap_seconds':.18}
+    return hashlib.sha256(json.dumps(recipe,sort_keys=True).encode()).hexdigest()
 
 
 def validate_assets(full=False):
@@ -162,6 +174,124 @@ def synthesize(text,output,voice,rate,cancel,style='warm'):
             _lock.release()
 
 
+def _local_output(output):
+    if '://' in str(output) or str(output).startswith(('\\\\','//')):
+        raise ValueError('Qwen voice output must be on a local disk.')
+    output=Path(output).resolve()
+    if output.suffix.lower()!='.wav':
+        raise ValueError('Qwen voice output must be a local WAV file.')
+    return output
+
+
+def cached_audio(text,output,voice,rate,style):
+    """A report is a completion marker, verified against text and actual audio."""
+    try:
+        report=json.loads(Path(output).with_suffix('.qwen.json').read_text(encoding='utf-8'))
+        if (report.get('revision')!=REVISION or report.get('voice')!=voice
+                or report.get('style')!=style or report.get('requested_rate')!=rate
+                or report.get('synthesis_recipe')!=synthesis_recipe()
+                or report.get('wav_sha256')!=file_hash(output)
+                or report.get('text_sha256')!=hashlib.sha256(text.encode('utf-8')).hexdigest()):
+            return None
+        with wave.open(str(output),'rb') as wav:
+            duration=wav.getnframes()/wav.getframerate()
+            if wav.getnchannels()!=1 or wav.getsampwidth()!=2 or wav.getframerate()!=report['sample_rate']:
+                return None
+            if len(wav.readframes(wav.getnframes()))!=wav.getnframes()*2:
+                return None
+        if (not math.isfinite(duration) or duration<=0 or not math.isfinite(report['duration'])
+                or abs(duration-report['duration'])>.01):
+            return None
+        cues=report['cues'];previous=0.
+        if not cues or ' '.join(' '.join(c['text'] for c in cues).split())!=' '.join(text.split()):
+            return None
+        for cue in cues:
+            start,end=cue['start'],cue['end']
+            if not (math.isfinite(start) and math.isfinite(end) and previous<=start<end<=duration+.01):
+                return None
+            previous=end
+        if abs(previous-duration)>.01:
+            return None
+        return cues,duration
+    except (OSError,ValueError,KeyError,TypeError,wave.Error,EOFError):
+        return None
+
+
+def _atomic_json(path,value):
+    temporary=path.with_name(path.name+'.tmp')
+    temporary.write_text(json.dumps(value,indent=2),encoding='utf-8')
+    temporary.replace(path)
+
+
+def synthesize_batch(items,voice,rate,cancel,style='engaging',progress=None):
+    """Return ordered (cues, duration) pairs; keep verified completed slides on cancel."""
+    from .media import check
+    if not isinstance(items,list) or not 1<=len(items)<=60:
+        raise ValueError('A voice batch needs between 1 and 60 slides.')
+    prepared=[]
+    for item in items:
+        validate_request(item['text'],voice,rate,style)
+        prepared.append({'text':item['text'],'output':str(_local_output(item['output']))})
+    if len({item['output'] for item in prepared})!=len(prepared):
+        raise ValueError('Every batch slide needs a distinct WAV output.')
+    if len({Path(item['output']).anchor.lower() for item in prepared})!=1:
+        raise ValueError('Batch WAV outputs must share a local disk for atomic publication.')
+    check(cancel)
+    while not _lock.acquire(timeout=.1):
+        check(cancel)
+    job=None;process=None
+    try:
+        pending=[item for item in prepared if cached_audio(item['text'],item['output'],voice,rate,style) is None]
+        if pending:
+            if not available():
+                raise ValueError('Qwen expressive voice is not installed. Run its explicit setup script.')
+            validate_assets(full=True)
+            job=Path(prepared[0]['output']).parent/f'.qwen-{uuid.uuid4().hex}'
+            job.mkdir(parents=True)
+            for item in pending:
+                Path(item['output']).parent.mkdir(parents=True,exist_ok=True)
+            request={'items':pending,'voice':voice,'rate':rate,'style':style,
+                     'progress':str(job/'progress.json')}
+            _atomic_json(job/'request.json',request)
+            with (job/'worker.log').open('wb') as log:
+                process=subprocess.Popen([str(PYTHON),'-m','backend.qwen_voice','--worker',str(job/'request.json')],
+                    cwd=ROOT,env=offline_environment(),stdout=log,stderr=subprocess.STDOUT,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+                started=time.monotonic();last=None
+                while process.poll() is None:
+                    check(cancel)
+                    if time.monotonic()-started>1800*len(pending):
+                        raise ValueError('Qwen batch exceeded its per-slide generation time allowance.')
+                    if progress:
+                        try:
+                            update=json.loads((job/'progress.json').read_text(encoding='utf-8'))
+                        except (OSError,ValueError):
+                            update=None
+                        if update and update!=last:
+                            last=update
+                            progress(100*(len(prepared)-len(pending)+update['completed'])/len(prepared),update['message'])
+                    try:process.wait(timeout=.2)
+                    except subprocess.TimeoutExpired:pass
+            if process.returncode:
+                raise ValueError('Qwen batch failed: '+(job/'worker.log').read_text(encoding='utf-8',errors='replace')[-2000:])
+        check(cancel)
+        results=[cached_audio(item['text'],item['output'],voice,rate,style) for item in prepared]
+        if any(result is None for result in results):
+            raise ValueError('Qwen batch returned incomplete or mismatched slide audio.')
+        if progress:progress(100,'All slide audio is complete and verified.')
+        return results
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:process.wait(timeout=5)
+            except subprocess.TimeoutExpired:process.kill();process.wait()
+        try:
+            if job is not None and job.is_dir():
+                shutil.rmtree(job)
+        finally:
+            _lock.release()
+
+
 def worker(request_path):
     # Set offline switches before importing Hugging Face or the voice package.
     os.environ.update(offline_environment())
@@ -179,7 +309,12 @@ def worker(request_path):
     from qwen_tts import Qwen3TTSModel
     from .speech_text import natural_blocks
     request=json.loads(Path(request_path).read_text(encoding='utf-8'))
-    validate_request(request['text'],request['voice'],request['rate'],request['style'])
+    batch=request.get('items')
+    if batch is not None and (not isinstance(batch,list) or not 1<=len(batch)<=60):
+        raise ValueError('A voice batch needs between 1 and 60 slides.')
+    for item in batch if batch is not None else [request]:
+        validate_request(item['text'],request['voice'],request['rate'],request['style'])
+        _local_output(item['output'])
     validate_assets(full=True)
     if not torch.cuda.is_available():
         raise ValueError('This optional Qwen voice adapter requires a CUDA-capable NVIDIA GPU.')
@@ -191,6 +326,29 @@ def worker(request_path):
     started=time.monotonic()
     model=Qwen3TTSModel.from_pretrained(str(MODEL_DIR),device_map='cuda:0',dtype=torch.bfloat16,
         attn_implementation='sdpa',local_files_only=True,trust_remote_code=False)
+    if batch is None:
+        _render_request(model,request,started)
+    else:
+        progress=Path(request['progress'])
+        for index,item in enumerate(batch):
+            torch.manual_seed(17)
+            _atomic_json(progress,{'completed':index,'message':f'Generating slide {index+1}/{len(batch)}'})
+            output=_local_output(item['output'])
+            temporary=Path(request_path).parent/f'slide-{index}.wav'
+            current={**request,**item,'output':str(temporary)}
+            _render_request(model,current,time.monotonic())
+            # The old report is removed before replacing audio so interruption cannot
+            # pair new audio with an older completion marker.
+            output.with_suffix('.qwen.json').unlink(missing_ok=True)
+            temporary.replace(output)
+            temporary.with_suffix('.json').replace(output.with_suffix('.qwen.json'))
+            _atomic_json(progress,{'completed':index+1,'message':f'Completed slide {index+1}/{len(batch)}'})
+
+
+def _render_request(model,request,started):
+    import numpy as np
+    import torch
+    from .speech_text import natural_blocks
     frames=[];cues=[];cursor=0.;sample_rate=None
     instruction=STYLES[request['style']]
     if request['rate']<.95:
@@ -198,22 +356,28 @@ def worker(request_path):
     elif request['rate']>1.05:
         instruction+=' Speak at a brisk but clearly understandable pace.'
     blocks=natural_blocks(request['text'])
-    for index,block in enumerate(blocks):
-        print(f'Generating thought {index+1}/{len(blocks)}',flush=True)
-        audio,sr=model.generate_custom_voice(text=block,language='English',speaker=request['voice'],
+    for offset in range(0,len(blocks),2):
+        group=blocks[offset:offset+2]
+        print(f'Generating thoughts {offset+1}–{offset+len(group)}/{len(blocks)}',flush=True)
+        audio,sr=model.generate_custom_voice(text=group,language='English',speaker=request['voice'],
             instruct=instruction,non_streaming_mode=True,max_new_tokens=1024)
-        samples=np.asarray(audio[0],dtype=np.float32)
-        if samples.ndim!=1 or not len(samples) or not np.isfinite(samples).all():
-            raise ValueError('Qwen voice returned invalid audio.')
+        if not isinstance(audio,(list,tuple)) or len(audio)!=len(group):
+            raise ValueError('Qwen voice returned a different number of passages than requested.')
+        if not isinstance(sr,(int,np.integer)) or isinstance(sr,bool) or sr<=0:
+            raise ValueError('Qwen voice returned an invalid sample rate.')
         if sample_rate is not None and sr!=sample_rate:
             raise ValueError('Qwen voice changed sample rate between passages.')
         sample_rate=sr
-        duration=len(samples)/sr
-        cues.append({'start':cursor,'end':cursor+duration,'text':block})
-        frames.append(samples);cursor+=duration
-        if index<len(blocks)-1:
-            silence=np.zeros(round(sr*.18),dtype=np.float32)
-            frames.append(silence);cursor+=len(silence)/sr
+        for index,(block,waveform) in enumerate(zip(group,audio),start=offset):
+            samples=np.asarray(waveform,dtype=np.float32)
+            if samples.ndim!=1 or not len(samples) or not np.isfinite(samples).all():
+                raise ValueError('Qwen voice returned invalid audio.')
+            duration=len(samples)/sr
+            cues.append({'start':cursor,'end':cursor+duration,'text':block})
+            frames.append(samples);cursor+=duration
+            if index<len(blocks)-1:
+                silence=np.zeros(round(sr*.18),dtype=np.float32)
+                frames.append(silence);cursor+=len(silence)/sr
     combined=np.concatenate(frames)
     peak=float(np.max(np.abs(combined)))
     if peak>.97:
@@ -223,6 +387,7 @@ def worker(request_path):
         wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(sample_rate)
         wav.writeframes((np.clip(combined,-1,1)*32767).astype('<i2').tobytes())
     report={'engine':'Qwen3-TTS 1.7B CustomVoice','revision':REVISION,'voice':request['voice'],
+            'synthesis_recipe':synthesis_recipe(),'wav_sha256':file_hash(output),
             'text_sha256':hashlib.sha256(request['text'].encode('utf-8')).hexdigest(),
             'style':request['style'],'requested_rate':request['rate'],
             'pace_control':'instruction-based; not an exact time stretch',

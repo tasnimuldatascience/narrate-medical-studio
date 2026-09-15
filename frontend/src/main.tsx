@@ -49,18 +49,44 @@ type VisualCue = {
   height?: number;
   paragraph?: number;
 };
+type EvidencePassage = { id: string; text: string };
+type EvidenceCollection =
+  EvidencePassage[] | Record<string, EvidencePassage | string>;
 type EvaluationFinding = {
   id?: string;
   origin?: string;
   severity?: string;
   category?: string;
-  message: string;
+  message?: string;
+  type?: string;
+  reason?: string;
+  verification_reason?: string;
+  verification_source_ids?: string[];
+  verification_draft_ids?: string[];
+  source_ids?: string[];
+  draft_ids?: string[];
+  source_spans?: EvidencePassage[];
+  draft_spans?: EvidencePassage[];
   source_quote?: string;
   draft_quote?: string;
   remediation?: string;
   evidence_ids?: string[];
 };
 type ScriptEvaluation = {
+  stale?: boolean;
+  stale_reasons?: string[];
+  model_identity?: { name: string; digest: string };
+  audience?: string;
+  version?: string;
+  evaluation_protocol?: string | Record<string, unknown>;
+  auto_revision_allowed?: boolean;
+  review_hints?: (EvaluationFinding | string)[];
+  uncertain_findings?: EvaluationFinding[];
+  dismissed_findings?: EvaluationFinding[];
+  evidence_audit?: {
+    source_passages?: EvidenceCollection;
+    draft_passages?: EvidenceCollection;
+  };
   state?: string;
   summary?: string;
   model?: string;
@@ -2544,6 +2570,85 @@ function App() {
     </div>
   );
 }
+function EvaluationEvidence({
+  finding,
+  report,
+}: {
+  finding: EvaluationFinding;
+  report: ScriptEvaluation;
+}) {
+  function passages(kind: "source" | "draft"): EvidencePassage[] {
+    const supplied =
+      kind === "source" ? finding.source_spans : finding.draft_spans;
+    const ids = [
+      ...((kind === "source" ? finding.source_ids : finding.draft_ids) || []),
+      ...((kind === "source"
+        ? finding.verification_source_ids
+        : finding.verification_draft_ids) || []),
+    ];
+    const collection =
+      kind === "source"
+        ? report.evidence_audit?.source_passages
+        : report.evidence_audit?.draft_passages;
+    const found = [...(supplied || [])];
+    for (const id of ids) {
+      if (found.some((item) => item.id === id)) continue;
+      const value = Array.isArray(collection)
+        ? collection.find((item) => item.id === id)
+        : collection?.[id];
+      found.push(
+        typeof value === "string"
+          ? { id, text: value }
+          : value || {
+              id,
+              text: "Linked passage unavailable in this report. Re-evaluate to retrieve its evidence.",
+            },
+      );
+    }
+    return found;
+  }
+  return (
+    <div className="finding-evidence">
+      {finding.verification_reason && (
+        <div>
+          <h4>Challenge review reasoning</h4>
+          <p>{finding.verification_reason}</p>
+        </div>
+      )}
+      {(["source", "draft"] as const).map((kind) => {
+        const spans = passages(kind);
+        const quote =
+          kind === "source" ? finding.source_quote : finding.draft_quote;
+        return spans.length || quote ? (
+          <div key={kind}>
+            <h4>
+              {kind === "source"
+                ? "Exact source passages"
+                : "Exact script passages"}
+            </h4>
+            {spans.length ? (
+              spans.map((span, index) => (
+                <div className="evidence-passage" key={`${span.id}-${index}`}>
+                  <span className="evidence-id">{span.id}</span>
+                  <blockquote>{span.text}</blockquote>
+                </div>
+              ))
+            ) : (
+              <blockquote>{quote}</blockquote>
+            )}
+          </div>
+        ) : null;
+      })}
+      {finding.remediation && (
+        <div>
+          <h4>Suggested next edit — check against the evidence</h4>
+          <p>{finding.remediation}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ScriptEvaluationPanel({
   slide,
   edited,
@@ -2561,24 +2666,32 @@ function ScriptEvaluationPanel({
   dirty: boolean;
   onEvaluate: () => void;
 }) {
-  const report = slide.evaluation,
-    findings = report?.findings || [];
-  const outdated =
+  const report = slide.evaluation;
+  const findings = report?.findings || [];
+  const uncertain = report?.uncertain_findings || [];
+  const dismissed = report?.dismissed_findings || [];
+  const hints = report?.review_hints || [];
+  const obsolete =
+    !!report && report.version !== "local-evaluation-v2-evidence-addressed";
+  const changed =
     !!report &&
     (edited ||
       (report.assessed_revision !== undefined &&
         report.assessed_revision !== slide.revision));
+  const outdated = obsolete || changed || !!report?.stale;
   const label = evaluating
     ? "Evaluating saved script"
     : slide.evaluation_error
       ? "Latest assessment failed"
-      : outdated
-        ? "Assessment out of date"
-        : !report
-          ? "Not assessed"
-          : findings.length
-            ? "Findings to review"
-            : "Practitioner review needed";
+      : obsolete
+        ? "Obsolete assessment — re-evaluate"
+        : changed || report?.stale
+          ? "Assessment out of date"
+          : !report
+            ? "Not assessed"
+            : findings.length || uncertain.length
+              ? "Findings and uncertainty require review"
+              : "Practitioner review needed";
   const categoryNames: Record<string, string> = {
     quantity: "Quantities and units",
     qualifier: "Conditions and qualifiers",
@@ -2593,7 +2706,7 @@ function ScriptEvaluationPanel({
       aria-busy={evaluating}
     >
       <div className="evaluation-heading">
-        <ShieldCheck size={18} />
+        <FileText size={18} />
         <h3>Check source fidelity</h3>
       </div>
       <p className="evaluation-state" role="status">
@@ -2601,9 +2714,10 @@ function ScriptEvaluationPanel({
         {label}
       </p>
       <p>
-        Compare the saved script with its source using local checks and model
-        critique. Findings can miss issues or flag correct wording; compare the
-        cited passages. This assessment does not approve medical content.
+        Compare the saved script with exact source passages. Two model passes
+        can still miss errors or agree incorrectly. Full medical review remains
+        necessary; this assessment does not approve content or authorize
+        automatic rewriting.
       </p>
       <button
         type="button"
@@ -2611,7 +2725,11 @@ function ScriptEvaluationPanel({
         disabled={disabled}
         onClick={onEvaluate}
       >
-        {evaluating ? "Evaluating…" : "Evaluate saved script"}
+        {evaluating
+          ? "Evaluating…"
+          : obsolete
+            ? "Re-evaluate saved script"
+            : "Evaluate saved script"}
       </button>
       {dirty && (
         <p className="evaluation-hint">
@@ -2626,8 +2744,8 @@ function ScriptEvaluationPanel({
       )}
       {evaluating && (
         <p className="evaluation-hint">
-          The local reviewer may take several minutes. Your narration stays
-          unchanged.
+          The local reviewers compare source and script evidence. This may take
+          several minutes. Your narration stays unchanged.
         </p>
       )}
       {!!slide.evaluation_error && (
@@ -2636,11 +2754,33 @@ function ScriptEvaluationPanel({
           {report && " The previous assessment remains below."}
         </p>
       )}
-      {outdated && (
+      {obsolete && (
+        <p className="evaluation-stale">
+          This report uses an older assessment method. Its findings are
+          historical, not an assessment under the current evidence review
+          protocol. Re-evaluate the saved script.
+        </p>
+      )}
+      {changed && (
         <p className="evaluation-stale">
           These findings do not assess the current edits. Save and evaluate
           again before relying on them.
         </p>
+      )}
+      {report?.stale && (
+        <div className="evaluation-stale" role="status">
+          <p>This saved assessment needs to be run again.</p>
+          <ul>
+            {(report.stale_reasons?.length
+              ? report.stale_reasons
+              : [
+                  "The assessment no longer matches the current source or reviewer settings.",
+                ]
+            ).map((reason, index) => (
+              <li key={index}>{reason}</li>
+            ))}
+          </ul>
+        </div>
       )}
       {report && (
         <div
@@ -2650,14 +2790,38 @@ function ScriptEvaluationPanel({
         >
           <div className="evaluation-meta">
             {report.model && <span>Local model: {report.model}</span>}
+            {report.model_identity?.digest && (
+              <span>Recorded model digest: {report.model_identity.digest}</span>
+            )}
+            {report.audience && (
+              <span>Assessed audience: {report.audience}</span>
+            )}
             {report.assessed_revision !== undefined && (
               <span>Saved revision {report.assessed_revision}</span>
             )}
+            <span>
+              {obsolete
+                ? "Historical assessment"
+                : "Source alignment + challenge review · no automatic script changes"}
+            </span>
           </div>
           {report.summary && (
             <p className="evaluation-summary">{report.summary}</p>
           )}
-          {findings.length ? (
+          <section
+            className="evaluation-group"
+            aria-label="Reported discrepancies"
+          >
+            <h4>
+              {obsolete ? "Historical findings" : "Reported discrepancies"}{" "}
+              <span>{findings.length}</span>
+            </h4>
+            {!!findings.length && (
+              <p>
+                Inspect every linked passage, including both sides of a source
+                conflict, before deciding whether to edit.
+              </p>
+            )}
             <ol className="evaluation-findings">
               {findings.map((finding, index) => (
                 <li key={finding.id || index}>
@@ -2668,52 +2832,124 @@ function ScriptEvaluationPanel({
                       >
                         {finding.severity === "high"
                           ? "High priority"
-                          : finding.severity === "medium"
-                            ? "Review"
-                            : "Consider"}
+                          : "Requires review"}
                       </span>
                       <strong>
-                        {categoryNames[finding.category || ""] ||
-                          "Source review"}
+                        {categoryNames[
+                          finding.category || finding.type || ""
+                        ] || "Source review"}
                       </strong>
-                      <span>{finding.message}</span>
+                      <span>{finding.message || finding.reason}</span>
                     </summary>
                     <div className="finding-evidence">
                       <span className="finding-origin">
-                        {finding.origin === "deterministic"
-                          ? "Rule-based check"
+                        {obsolete
+                          ? "Historical automated finding"
                           : finding.origin === "critic"
-                            ? "Local model critique"
-                            : "Automated check"}
+                            ? "Two-pass model agreement · requires review"
+                            : "Source status notice · requires review"}
                       </span>
-                      {finding.source_quote && (
-                        <div>
-                          <h4>Source excerpt</h4>
-                          <blockquote>{finding.source_quote}</blockquote>
-                        </div>
-                      )}
-                      {finding.draft_quote && (
-                        <div>
-                          <h4>Script excerpt</h4>
-                          <blockquote>{finding.draft_quote}</blockquote>
-                        </div>
-                      )}
-                      {finding.remediation && (
-                        <div>
-                          <h4>Suggested next edit</h4>
-                          <p>{finding.remediation}</p>
-                        </div>
-                      )}
                     </div>
+                    <EvaluationEvidence finding={finding} report={report} />
                   </details>
                 </li>
               ))}
             </ol>
-          ) : (
-            <p className="evaluation-hint">
-              No specific findings were returned. Check every claim, quantity,
-              and qualifier against the source; the assessment can miss errors.
-            </p>
+            {!findings.length && (
+              <p>
+                No discrepancies were retained. This does not establish source
+                fidelity or clinical correctness; review all claims, quantities,
+                and qualifiers.
+              </p>
+            )}
+          </section>
+          {!!uncertain.length && (
+            <section
+              className="evaluation-group evaluation-uncertain"
+              aria-label="Unresolved assessment uncertainty"
+            >
+              <h4>
+                Unresolved uncertainty <span>{uncertain.length}</span>
+              </h4>
+              <p>
+                The model checks did not establish an outcome for these items.
+                Review the evidence yourself; uncertainty is not a clean result.
+              </p>
+              <ol className="evaluation-findings">
+                {uncertain.map((finding, index) => (
+                  <li key={finding.id || index}>
+                    <details>
+                      <summary>
+                        <strong>
+                          {categoryNames[
+                            finding.type || finding.category || ""
+                          ] || "Unresolved source question"}
+                        </strong>
+                        <span>{finding.reason || finding.message}</span>
+                      </summary>
+                      <EvaluationEvidence finding={finding} report={report} />
+                    </details>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+          {!!hints.length && (
+            <section className="evaluation-group" aria-label="Editing hints">
+              <h4>
+                Editing hints <span>{hints.length}</span>
+              </h4>
+              <p>
+                Lexical and readability checks suggest places to inspect. These
+                are not confirmed factual errors.
+              </p>
+              <ol className="evaluation-findings">
+                {hints.map((hint, index) => (
+                  <li key={index}>
+                    {typeof hint === "string" ? (
+                      <p className="evaluation-hint-item">{hint}</p>
+                    ) : (
+                      <details>
+                        <summary>
+                          <strong>
+                            {categoryNames[hint.category || hint.type || ""] ||
+                              "Editing guide"}
+                          </strong>
+                          <span>{hint.message || hint.reason}</span>
+                        </summary>
+                        <EvaluationEvidence finding={hint} report={report} />
+                      </details>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+          {!!dismissed.length && (
+            <details className="evaluation-group evaluation-dismissed">
+              <summary>Refuted candidates · {dismissed.length}</summary>
+              <p>
+                A later model pass rejected these proposed discrepancies. This
+                is a model judgment, not proof that the passages are correct.
+              </p>
+              <ol className="evaluation-findings">
+                {dismissed.map((finding, index) => (
+                  <li key={finding.id || index}>
+                    <details>
+                      <summary>
+                        <strong>
+                          {categoryNames[
+                            finding.type || finding.category || ""
+                          ] || "Refuted candidate"}
+                        </strong>
+                        <span>{finding.reason || finding.message}</span>
+                      </summary>
+                      <EvaluationEvidence finding={finding} report={report} />
+                    </details>
+                  </li>
+                ))}
+              </ol>
+            </details>
           )}
         </div>
       )}

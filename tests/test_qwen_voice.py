@@ -166,22 +166,24 @@ def test_cancellation_terminates_worker_without_publishing_audio(assets,tmp_path
     assert not qwen._lock.locked()
 
 
-def test_worker_uses_only_local_weights_and_measures_complete_thoughts(assets,tmp_path,monkeypatch):
+@pytest.mark.parametrize('batch',[False,True])
+def test_worker_uses_only_local_weights_and_measures_complete_thoughts(assets,tmp_path,monkeypatch,batch):
     for name in ('HF_HUB_OFFLINE','TRANSFORMERS_OFFLINE','HF_DATASETS_OFFLINE',
                  'HF_HUB_DISABLE_TELEMETRY','DO_NOT_TRACK','GRADIO_ANALYTICS_ENABLED',
                  'TOKENIZERS_PARALLELISM','PYTHONUTF8'):
         monkeypatch.setenv(name,os.environ.get(name,''))
-    calls=[]
+    calls=[];loads=[]
     class Model:
         @staticmethod
         def from_pretrained(path,**kwargs):
+            loads.append(path)
             assert path==str(assets)
             assert kwargs['local_files_only'] is True
             assert kwargs['trust_remote_code'] is False
             return Model()
         def generate_custom_voice(self,**kwargs):
             calls.append(kwargs)
-            return [np.full(24000,.05,dtype=np.float32)],24000
+            return [np.full(24000,.05,dtype=np.float32) for text in kwargs['text']],24000
     torch=SimpleNamespace(cuda=SimpleNamespace(is_available=lambda:True,
         mem_get_info=lambda:(8*1024**3,8*1024**3),max_memory_allocated=lambda:1024**3),
         bfloat16='bf16',set_num_threads=lambda count:None,manual_seed=lambda seed:None)
@@ -194,13 +196,69 @@ def test_worker_uses_only_local_weights_and_measures_complete_thoughts(assets,tm
         monkeypatch.setattr(owner,name,getattr(owner,name))
     output=tmp_path/'speech.wav'
     request=tmp_path/'request.json'
-    request.write_text(json.dumps({'text':'First thought.\n\nSecond thought.','voice':'Aiden',
-        'rate':.8,'style':'engaging','output':str(output)}))
+    payload={'text':'First thought.\n\nSecond thought.','voice':'Aiden',
+        'rate':.8,'style':'engaging','output':str(output)}
+    if batch:
+        payload['items']=[{'text':payload['text'],'output':str(output)},
+                          {'text':'Another slide.','output':str(tmp_path/'second.wav')}]
+        payload['progress']=str(tmp_path/'progress.json')
+    request.write_text(json.dumps(payload))
     qwen.worker(request)
-    assert [call['text'] for call in calls]==['First thought.','Second thought.']
+    assert len(loads)==1
+    assert [call['text'] for call in calls]==[['First thought.','Second thought.']]+([['Another slide.']] if batch else [])
     assert all(call['speaker']=='Aiden' and 'slower' in call['instruct'] for call in calls)
-    report=json.loads(output.with_suffix('.json').read_text())
+    report=json.loads(output.with_suffix('.qwen.json' if batch else '.json').read_text())
     assert report['duration']==2.18
     assert report['text_sha256']==hashlib.sha256(b'First thought.\n\nSecond thought.').hexdigest()
     assert report['cues'][1]['start']==1.18
     assert report['peak_gpu_memory_mib']==1024
+    assert report['synthesis_recipe']==qwen.synthesis_recipe()
+    assert report['wav_sha256']==qwen.file_hash(output)
+    if batch:
+        monkeypatch.setattr(qwen.subprocess,'Popen',lambda *a,**kw:pytest.fail('Valid cached batch must not load GPU'))
+        results=qwen.synthesize_batch(payload['items'],'Aiden',.8,threading.Event())
+        assert [result[1] for result in results]==[2.18,1]
+        original=output.read_bytes()
+        corrupted=bytearray(original);corrupted[-1]^=1
+        output.write_bytes(corrupted)
+        assert qwen.cached_audio(payload['text'],output,'Aiden',.8,'engaging') is None
+
+        output.write_bytes(original)
+        for field in ('synthesis_recipe','wav_sha256'):
+            legacy={k:v for k,v in report.items() if k!=field}
+            output.with_suffix('.qwen.json').write_text(json.dumps(legacy))
+            assert qwen.cached_audio(payload['text'],output,'Aiden',.8,'engaging') is None
+        output.with_suffix('.qwen.json').write_text(json.dumps(report))
+        assert qwen.cached_audio(payload['text'],output,'Ryan',.8,'engaging') is None
+        report.pop('text_sha256')
+        output.with_suffix('.qwen.json').write_text(json.dumps(report))
+        assert qwen.cached_audio(payload['text'],output,'Aiden',.8,'engaging') is None
+        report['text_sha256']=hashlib.sha256(payload['text'].encode()).hexdigest()
+        report['cues'][0]['text']='Wrong words.'
+        output.with_suffix('.qwen.json').write_text(json.dumps(report))
+        assert qwen.cached_audio(payload['text'],output,'Aiden',.8,'engaging') is None
+
+
+@pytest.mark.parametrize('failure',[None,'count','nonfinite'])
+def test_block_batch_preserves_order_lengths_and_rejects_invalid_results(tmp_path,monkeypatch,failure):
+    calls=[]
+    class Model:
+        def generate_custom_voice(self,**kwargs):
+            texts=kwargs['text'];calls.append(texts)
+            arrays=[np.full({'First.':2400,'Second.':4800,'Third.':7200}[text],.05,dtype=np.float32) for text in texts]
+            if failure=='count':return arrays[:-1],24000
+            if failure=='nonfinite':arrays[-1][0]=np.nan
+            return arrays,24000
+    monkeypatch.setitem(sys.modules,'torch',SimpleNamespace(cuda=SimpleNamespace(max_memory_allocated=lambda:0)))
+    output=tmp_path/'batch.wav'
+    request={'text':'First.\n\nSecond.\n\nThird.','voice':'Aiden','rate':1,'style':'engaging','output':str(output)}
+    if failure:
+        with pytest.raises(ValueError):qwen._render_request(Model(),request,0)
+        assert not output.exists()
+    else:
+        qwen._render_request(Model(),request,0)
+        report=json.loads(output.with_suffix('.json').read_text())
+        assert calls==[['First.','Second.'],['Third.']]
+        assert [cue['text'] for cue in report['cues']]==['First.','Second.','Third.']
+        assert [cue['start'] for cue in report['cues']]==pytest.approx([0,.28,.66])
+        assert report['duration']==pytest.approx(.96)

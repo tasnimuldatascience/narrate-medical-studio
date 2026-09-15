@@ -4376,3 +4376,62 @@ input[type="range"] {
   background: #111;
   margin-top: 12px;
 }
+
+.evaluation-group {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #574361;
+}
+.evaluation-group > h4,
+.evaluation-group > summary {
+  color: #efdbfa;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 9px;
+}
+.evaluation-group > h4 span {
+  color: #d9c2e8;
+  margin-left: 7px;
+  font-variant-numeric: tabular-nums;
+}
+.evaluation-group > p {
+  color: #cdbbd9;
+  font-size: 12px;
+  line-height: 1.75;
+}
+.evaluation-uncertain {
+  border-top-color: #b19052;
+}
+.evaluation-uncertain > h4 {
+  color: #f0d6a8;
+}
+.evaluation-dismissed > summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.evaluation-dismissed > summary:focus-visible {
+  outline: 2px solid #d3aff0;
+  outline-offset: 4px;
+}
+.evaluation-hint-item {
+  color: #d6c3e2;
+  font-size: 12px;
+  line-height: 1.75;
+  padding: 12px;
+  margin: 0;
+}
+.evidence-passage + .evidence-passage {
+  margin-top: 12px;
+}
+.evidence-id {
+  display: block;
+  color: #cdb6dd;
+  font-size: 11px;
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+.evaluation-meta,
+.finding-origin,
+.finding-severity {
+  font-size: 11px;
+}
