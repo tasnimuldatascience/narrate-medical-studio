@@ -9,22 +9,30 @@ flowchart TD
     B --> D[Render source slides with PowerPoint]
     D --> O[Optional local OCR transcription]
     O --> P[Author corrects image text and checks against slide]
-    C --> E[Optional local Ollama narration draft]
+    C --> E[Hash original source evidence]
     P --> E
-    E --> Q[Local editorial pass compares draft with source]
+    E --> T[Local teacher: draft and spoken edit]
+    T --> Q[Separate source critic and validated evidence quotes]
+    Q --> R[At most one revision and re-audit]
     D --> F[Practitioner edits the lesson]
-    Q --> F
+    R --> F
     F --> G[Author source regions and knowledge checks]
     G --> H[Approve the exact revision]
-    H --> I[Local Kokoro narration]
+    H --> I[Local Qwen expressive voice or Kokoro/Piper/Windows]
     I --> J[Estimate short captions within measured speech blocks]
-    J --> K[Whiteboard reveals or Studio callouts]
+    J --> K[Guided focus / Whiteboard / Studio / native PPT effects]
     K --> L[FFmpeg encodes 1080p video]
-    L --> M[FFprobe verifies streams and duration]
+    L --> M[FFprobe timing and PCM audio checks]
     M --> N[MP4 and offline interactive lesson ZIP]
 ```
 
 ## Source and review
+
+**Create slide preview** runs the saved source/script through a private, permanently watermarked video job before clinical approval. It stores only a revision-bound preview record and never changes narration, source review or approval. The API exposes only successfully verified, registered MP4 previews; incomplete jobs and arbitrary project files are not downloadable. This path does not create a released lesson ZIP.
+
+The editor's **Build teaching draft** explicitly selects the multi-role workflow. The API retains its legacy two-pass default for older clients; pass `workflow: "agents"` for the checkpointed workflow. **Evaluate script** assesses the current saved script without rewriting it or changing approval. Evaluation requires visible image text for image-only slides. Exact evidence quotations are checked before findings can be saved. Empty findings mean “needs review,” never “clinically passed.” Source/script edits invalidate assessments.
+
+Role artifacts are local JSON with atomic writes and hashed inputs under `data/<project>/agent-runs/<run>/<fingerprint>/`. Matching completed stages can resume after failure. Source/model/prompt/style changes prevent stale reuse. These are bounded editorial checkpoints, not a distributed production scheduler.
 
 The uploaded original is retained locally. Conversion operates on a copy with macros, active embedded content, and external relationships removed. OOXML extraction reads editable text, notes, and tables. A separate optional OCR step transcribes rendered slide images; neither step interprets anatomy or checks medical validity.
 
@@ -38,7 +46,7 @@ The author supplies diagram regions, labels, narration, and any assessment. An e
 
 ## Spoken narration editing
 
-Optional local AI drafting now makes two Ollama generation calls. The first produces a spoken draft from extracted text, speaker notes, tables, and available image transcription. The second performs an editorial pass against those same sources, checking the draft's wording, qualifiers, quantities, omissions, and source disagreements while improving sentence structure. Sources and the initial draft are treated as untrusted data, not instructions. The result is a structured, unapproved narration with review flags and diagnostic information.
+The teacher stage makes two Ollama generation calls. The first produces a spoken draft from extracted text, speaker notes, tables, and available image transcription. The second performs an editorial pass against those same sources, checking the draft's wording, qualifiers, quantities, omissions, and source disagreements while improving sentence structure. Sources and the initial draft are treated as untrusted data, not instructions. The checkpointed workflow then runs a separate source critic, with bounded revision/re-audit where appropriate. The result is a structured, unapproved narration with review flags and diagnostic information.
 
 The current prompt version is `medical-source-v5-editor`; it is still being evaluated. An editorial pass or favorable readability score does not establish that the output preserves every fact. Authors must compare the final script with all accepted source material, especially where notes qualify or contradict visible slide text. An unresolved disagreement needs an explicit author decision, not an automatic choice of whichever wording sounds clearer.
 

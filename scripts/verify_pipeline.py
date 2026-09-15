@@ -148,7 +148,7 @@ def fixture():
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--style',choices=['whiteboard','studio'],
+    parser.add_argument('--style',choices=['whiteboard','studio','focus','powerpoint'],
         help='Explicit styles use export-STYLE folders; omitted uses whiteboard in export.')
     args=parser.parse_args()
     style=args.style or 'whiteboard'

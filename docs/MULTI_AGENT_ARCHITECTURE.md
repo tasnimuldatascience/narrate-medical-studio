@@ -4,18 +4,34 @@
 
 An end-to-end offline system with several specialized agents is a feasible direction for this project. Agents can run sequentially on one workstation; they do not require simultaneous model instances or cloud services. However, **the current application is a working development release, not a complete multi-agent system or an industry-validated medical product**. “Google level” is an ambition, not a measurable certification. Release claims should refer to demonstrated reliability, source fidelity, usability, privacy, and deployment evidence.
 
-The current two-pass writer calls a local model twice with different instructions. It does not provide independent agent isolation, a durable task graph, evidence-level claim checking, resumable stage checkpoints, or an independent publication gate. More agents alone would not fix a model's medical errors.
+The editor now runs a checkpointed source analyst → teacher → source critic workflow, with at most one revision and re-audit. The source analyst is deterministic; the teacher and critic are separate local model calls with separate contracts. The critic receives original evidence and the candidate, not the teacher's private reasoning. Using the same model weights for both does not provide independent clinical validation.
 
-This document is a proposed architecture. It does not implement these changes or supersede practitioner review. Current behavior is described in [PIPELINE.md](PIPELINE.md); test evidence is recorded in [VALIDATION.md](VALIDATION.md), and broader work remains in [ROADMAP.md](ROADMAP.md).
+The first editorial milestone below is implemented. Later production gates remain a target architecture. Current behavior is described in [PIPELINE.md](PIPELINE.md); test evidence is recorded in [VALIDATION.md](VALIDATION.md), and broader work remains in [ROADMAP.md](ROADMAP.md).
+
+## Implemented editorial milestone
+
+| Component | Implemented contract |
+|---|---|
+| Evidence packet | Stable IDs for native text, notes, image transcription and table cells. Content/provenance hash includes original deck and rendered image hashes. Editorial revision is tracked separately. |
+| Teacher | Source-bound draft plus editorial pass; short spoken thought groups and preserved conditions, numbers, units and qualifiers. |
+| Critic | Separate schema-constrained call against original evidence. Exact source/script quotations and evidence IDs are validated; malformed or fabricated citations fail the stage. Deterministic quantity/qualifier diagnostics remain distinguishable from model findings. |
+| Bounded repair | At most one teacher revision, followed by another critic assessment. Remaining findings stay visible; agreement never grants approval. |
+| Durable stages | Atomic JSON checkpoints under a private project run directory. Model digest, source, revision, prompts, code, options and style determine reuse. Corrupt/mismatched artifacts are recomputed. Completed stage output is not committed to the slide until the workflow completes. |
+| Authoring contract | Build teaching draft or evaluate an existing script. Evaluation stores the assessed revision, findings, source/script excerpts and remediation. Text/source changes invalidate it; a failed attempt retains the prior report with a visible error. |
+| Voice boundary | Optional Qwen3-TTS 1.7B CustomVoice in an isolated CUDA process, with fixed narrator/delivery presets and verified local model assets. Ollama generation requests release model residency after a call. A single app worker serializes expensive work. |
+| Visual director | Author-defined regions feed Whiteboard, Studio, or Guided focus. Native PowerPoint mode flattens supported existing effects into a complete fitted video timeline; it does not invent missing effects. |
+| Output QA | FFprobe checks format/timing; PCM checks flag silence and near-clipping. Naturalness, terminology pronunciation, meaning and comprehension remain explicit listening/reviewer assessments. |
+
+The durable editorial checkpoints do **not** implement database-backed worker leases, normalized migrations, resumable media generation, signed reviewer identity or a packaged offline installer. Synchronous Ollama requests currently acknowledge cancellation after response or timeout; voice/native-render subprocesses can be terminated. These limits are tracked below rather than hidden behind agent labels.
 
 ## Current evidence and the proposed change
 
 | Concern | Current implementation | Proposed change |
 |---|---|---|
-| Job orchestration | `backend/app.py`: one `ThreadPoolExecutor` worker, project-level job status, in-memory cancellation tokens. Startup marks interrupted jobs failed. | Persist a dependency graph, per-stage attempts, leases, cancellation requests, checkpoints, and recovery decisions. Resume verified stages. |
+| Job orchestration | One app worker plus a local model lock; project job status, cancellation tokens, startup recovery and atomic editorial stage checkpoints. | Persist normalized run/stage records, leases and restart-resumable media jobs. |
 | Persistence | `backend/store.py`: SQLite WAL transactions; each project is one JSON document. | Keep project APIs while adding normalized run, stage, artifact, review, and publication records through migrations. |
-| Source evidence | `backend/extract.py` and `backend/ocr.py`: safe rendering copy, source text/notes/tables, local OCR, editable transcription, source-review checkbox. | Immutable source packets with hashes, stable evidence IDs, image regions, text spans, reading order, and explicit source disagreements. |
-| Writing | `backend/narration.py`: source-bound draft and editorial pass; lexical diagnostics; local model guards. | Separate teacher and critic contracts. Critic audits claims against original evidence without receiving the teacher's private reasoning. Neither can approve a lesson. |
+| Source evidence | Safe rendering copy, source text/notes/tables, local OCR and author review. Editorial packets have hashes and stable evidence IDs. | Add verified claim-to-image-region links, robust reading order and source conflict resolution tools. |
+| Writing | Source-bound teacher/editor, separate critic, exact quote validation with one bounded repair, optional revision/re-audit, deterministic nonregression checks. | Calibrate against educator labels and establish acceptable false-positive/false-negative rates before relying on the critic. |
 | Review | Revision checks and named approval; source/script/quiz/region changes reset approval. Reviewer names are not authenticated signatures. | Signed review records bound to exact source, script, assessment, visual plan, and final-preview revisions. Authentication for organizational deployments. |
 | Visual output | `backend/compositor.py`, `backend/visual_cues.py`, `backend/whiteboard.py`: reviewed source-region animation, captions, full-source overview. | Visual director proposes an evidence-linked scene plan. Practitioner accepts regions and sequence; a deterministic renderer executes the accepted plan. |
 | Audio and reading | Local voice synthesis; caption estimates are separate from complete reading passages. | Versioned pronunciation decisions, tested alignment when needed, explicit timing confidence, and audio/video review tied to final artifacts. |

@@ -2,11 +2,13 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import threading
+import time
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from typing import Literal
 
@@ -14,10 +16,11 @@ import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import store, extract, media, narration, voice
+from .scene_timing import paragraphs as narration_paragraphs
 
 pool = ThreadPoolExecutor(max_workers=1)
 cancellations = {}
@@ -121,11 +124,11 @@ def health():
                 powerpoint=True
         except OSError:
             pass
-    from . import ocr
+    from . import ocr, qwen_voice
     return {'offline':True,'models':models,'ollama_error':ollama_error,'ffmpeg':bool(shutil.which('ffmpeg') and shutil.which('ffprobe')),
         'renderer':powerpoint or bool(os.environ.get('NARRATE_SOFFICE') or shutil.which('soffice')),
-        'renderer_name':'Microsoft PowerPoint' if powerpoint else 'LibreOffice',
-        'piper':media.voice_path().is_file(),'kokoro':voice.available(),'ocr':ocr.available(),'windows_voice':os.name=='nt','data_path':str(store.DATA),
+        'renderer_name':'Microsoft PowerPoint' if powerpoint else 'LibreOffice','powerpoint_animation':powerpoint,
+        'piper':media.voice_path().is_file(),'kokoro':voice.available(),'qwen_tts':qwen_voice.available(),'ocr':ocr.available(),'windows_voice':os.name=='nt','data_path':str(store.DATA),
         'version':'0.1.0'}
 
 @app.get('/api/projects')
@@ -196,6 +199,7 @@ class VisualCue(BaseModel):
     y:float=Field(ge=0,le=1)
     width:float=Field(ge=.02,le=1,default=.24)
     height:float=Field(ge=.02,le=1,default=.24)
+    paragraph:int|None=Field(default=None,ge=0)
 
 class SlideEdit(BaseModel):
     narration:str=Field(max_length=12000)
@@ -211,19 +215,29 @@ def edit_slide(project_id:str,number:int,body:SlideEdit):
         if slide['revision']!=body.revision:
             raise HTTPException(409,'This slide changed in another window. Reload before saving.')
         knowledge=body.knowledge.model_dump() if body.knowledge else None
-        visual_cues=[c.model_dump() for c in body.visual_cues]
+        visual_cues=[c.model_dump(exclude_none=True) for c in body.visual_cues]
+        paragraph_count=len(narration_paragraphs(body.narration))
+        if any(c.get('paragraph',-1)>=paragraph_count for c in visual_cues):
+            raise HTTPException(400,'Choose a paragraph that exists in the saved narration for every visual cue.')
         if any(not c['label'].strip() for c in visual_cues):
             raise HTTPException(400,'Every visual cue needs a label.')
         if knowledge and (not knowledge['question'].strip() or not knowledge['explanation'].strip()
                           or any(not v.strip() for v in knowledge['options'])
                           or len({v.strip().casefold() for v in knowledge['options']})<3):
             raise HTTPException(400,'A knowledge check needs three distinct, nonempty choices.')
-        prior_cues=[VisualCue.model_validate(c).model_dump() for c in slide.get('visual_cues',[])]
+        prior_cues=[VisualCue.model_validate(c).model_dump(exclude_none=True) for c in slide.get('visual_cues',[])]
         if slide['narration']!=body.narration or slide.get('knowledge')!=knowledge or prior_cues!=visual_cues:
-            if slide['narration']!=body.narration:
+            narration_changed=slide['narration']!=body.narration
+            if narration_changed:
                 slide['narration_quality']=None
+                slide['evaluation']=None
+                slide.pop('evaluation_error',None)
                 slide['ai_flags']=['Narration was edited. Previous draft diagnostics no longer apply; compare this revision with all source material.']
-            slide.update(narration=body.narration,revision=slide['revision']+1,approved=False,reviewer='',approved_at=None,draft_origin='reviewer edit')
+            slide.update(narration=body.narration,revision=slide['revision']+1,approved=False,reviewer='',approved_at=None)
+            if narration_changed:
+                slide['draft_origin']='reviewer edit'
+            if slide.get('evaluation'):
+                slide['evaluation']['assessed_revision']=slide['revision']
             slide['knowledge']=knowledge
             slide['visual_cues']=visual_cues
             store.event(p,'script_edited',f'Slide {number}, revision {slide["revision"]}. Approval reset.')
@@ -252,7 +266,8 @@ def edit_source(project_id:str,number:int,body:SourceEdit):
             raise HTTPException(400,'Add a transcription before marking it checked.')
         if s.get('visual_text','')!=body.visual_text or s.get('source_reviewed',False)!=body.source_reviewed:
             s.update(visual_text=body.visual_text,source_reviewed=body.source_reviewed,
-                revision=s['revision']+1,approved=False,reviewer='',approved_at=None,narration_quality=None)
+                revision=s['revision']+1,approved=False,reviewer='',approved_at=None,narration_quality=None,evaluation=None)
+            s.pop('evaluation_error',None)
             s['ai_flags']=list(dict.fromkeys(s.get('ai_flags',[])+['Source transcription changed. Review or regenerate the narration against this source.']))
             store.event(p,'source_edited',f'Slide {number}; image text checked: {body.source_reviewed}; narration approval reset.')
     return store.get(project_id)
@@ -272,7 +287,8 @@ def read_image_text(project_id:str,number:int):
             # Existing edited text is retained; OCR supplies a separate candidate.
             if not s.get('visual_text','').strip():
                 s.update(visual_text=result['text'],source_reviewed=False,revision=s['revision']+1,
-                    approved=False,reviewer='',approved_at=None,narration_quality=None)
+                    approved=False,reviewer='',approved_at=None,narration_quality=None,evaluation=None)
+                s.pop('evaluation_error',None)
             store.event(p,'image_text_detected',f'Slide {number}; local OCR candidate requires visual verification.')
     return submit(project_id,'ocr',operation)
 
@@ -308,12 +324,78 @@ def render(project_id:str):
 class DraftRequest(BaseModel):
     model:str=Field(max_length=120)
     style:Literal['conversational','concise']='conversational'
+    workflow:Literal['agents','legacy']='legacy'
+
+
+def agent_folder(project_id,number,model,mode):
+    """Resume the same requested revision; fingerprints validate checkpoints."""
+    with store.edit(project_id) as p:
+        s=get_slide(p,number)
+        prior=s.get('agent_run') or {}
+        reusable=(prior.get('input_revision')==s['revision'] and prior.get('model')==model
+                  and prior.get('mode')==mode and prior.get('status') in {'running','failed','cancelled'})
+        run_id=prior['id'] if reusable else uuid.uuid4().hex
+        # Run IDs only originate here; validate persisted values before path use.
+        import re
+        if not re.fullmatch(r'[a-f0-9]{32}',run_id):raise ValueError('Invalid local agent run identifier.')
+        s['agent_run']={'id':run_id,'mode':mode,'model':model,'input_revision':s['revision'],'status':'running'}
+    folder=store.directory(project_id)/'agent-runs'/run_id
+    folder.mkdir(parents=True,exist_ok=True)
+    return folder
+
+
+def agent_failure(project_id,number,exc):
+    with store.edit(project_id) as p:
+        s=get_slide(p,number)
+        if s.get('agent_run'):
+            s['agent_run']['status']='cancelled' if isinstance(exc,media.Cancelled) else 'failed'
+        s['evaluation_error']=str(exc)[-1500:]
+
+
+def evidence_slide(project,slide):
+    result=dict(slide)
+    result['source_sha256']=project['source_sha256']
+    visual=store.directory(project['id'])/'slides'/f'slide-{slide["number"]}.png'
+    if visual.is_file():
+        result['source_image_sha256']=hashlib.sha256(visual.read_bytes()).hexdigest()
+    return result
+
+
+class EvaluationRequest(BaseModel):
+    model:str=Field(max_length=120)
+
+
+@app.post('/api/projects/{project_id}/slides/{number}/evaluate')
+def evaluate_slide(project_id:str,number:int,body:EvaluationRequest):
+    get_slide(store.get(project_id),number)
+    def operation(cancel):
+        from . import agent_workflow
+        p=store.get(project_id)
+        s=get_slide(p,number)
+        folder=agent_folder(project_id,number,body.model,'evaluate')
+        try:
+            if s.get('image') and not s.get('text','').strip() and not s.get('visual_text','').strip():
+                raise ValueError('Add the visible image text under Source before evaluation so the critic can compare the whole slide.')
+            result=agent_workflow.evaluate(evidence_slide(p,s),s['narration'],body.model,p['audience'],run_folder=folder,
+                cancel=cancel,progress=lambda pc,msg:progress(project_id,pc,msg))
+            media.check(cancel)
+            with store.edit(project_id) as current:
+                saved=get_slide(current,number)
+                if saved['revision']!=s['revision']:raise ValueError('The script changed during evaluation. Evaluate the saved revision again.')
+                saved['evaluation']={**result['evaluation'],'assessed_revision':saved['revision']}
+                saved.pop('evaluation_error',None)
+                saved['agent_run'].update(status='completed',trace=result['trace'],fingerprint=result['fingerprint'])
+                store.event(current,'script_evaluated',f'Slide {number}, revision {saved["revision"]}; local critic {body.model}; no clinical approval.')
+        except Exception as exc:
+            agent_failure(project_id,number,exc)
+            raise
+    return submit(project_id,'evaluate',operation)
 
 @app.post('/api/projects/{project_id}/slides/{number}/draft')
 def draft(project_id:str,number:int,body:DraftRequest):
     def operation(cancel):
         p=store.get(project_id)
-        source_slide=dict(get_slide(p,number))
+        source_slide=evidence_slide(p,get_slide(p,number))
         detected=None
         if source_slide.get('image') and not source_slide.get('text','').strip() and not source_slide.get('visual_text','').strip():
             from . import ocr
@@ -321,24 +403,159 @@ def draft(project_id:str,number:int,body:DraftRequest):
                 raise ValueError('This slide stores its text in an image. Set up offline OCR or add the visible text under Source > Image text before drafting.')
             detected=ocr.extract_text(store.directory(project_id)/'slides'/f'slide-{number}.png',cancel)
             source_slide.update(visual_text=detected['text'],source_reviewed=False)
-        result=narration.generate(source_slide,body.model,p['audience'],style=body.style,cancel=cancel)
+        workflow_result=None
+        if body.workflow=='agents':
+            from . import agent_workflow
+            folder=agent_folder(project_id,number,body.model,'draft')
+            try:
+                workflow_result=agent_workflow.run(source_slide,body.model,p['audience'],run_folder=folder,
+                    style=body.style,cancel=cancel,progress=lambda pc,msg:progress(project_id,pc,msg))
+                result=narration.Draft.model_validate(workflow_result['candidate'])
+                media.check(cancel)
+            except Exception as exc:
+                agent_failure(project_id,number,exc)
+                raise
+        else:
+            from .evaluation import model_slot
+            with model_slot(cancel):
+                result=narration.generate(source_slide,body.model,p['audience'],style=body.style,cancel=cancel)
         media.check(cancel)
         with store.edit(project_id) as p:
             s=get_slide(p,number)
+            if s['revision']!=source_slide['revision']:
+                raise ValueError('The source changed during drafting. Build a draft from the saved revision again.')
             if detected is not None:
                 s.update(ocr=detected,visual_text=detected['text'],source_reviewed=False)
                 store.event(p,'image_text_detected',f'Slide {number}; automatically included local OCR in drafting; requires visual verification.')
             s.update(narration=result.narration,revision=s['revision']+1,approved=False,approved_at=None,reviewer='',draft_origin=f'Local AI · {body.model}')
             s['ai_flags']=result.review_flags
             s['narration_quality']=result.quality
+            s['evaluation']=({**workflow_result['evaluation'],'assessed_revision':s['revision']} if workflow_result else None)
+            s.pop('evaluation_error',None)
+            if workflow_result:
+                s['agent_run'].update(status='completed',trace=workflow_result['trace'],fingerprint=workflow_result['fingerprint'])
             store.event(p,'ai_draft',f'Slide {number}; {body.model}; {body.style}; prompt {narration.PROMPT_VERSION}')
     get_slide(store.get(project_id),number)
     return submit(project_id,'draft',operation)
 
 class VoiceRequest(BaseModel):
-    engine:Literal['kokoro','piper','windows']='kokoro'
-    voice:Literal['af_heart','af_bella','am_michael','bf_emma']='af_heart'
+    engine:Literal['kokoro','piper','windows','qwen']='kokoro'
+    voice:Literal['af_heart','af_bella','am_michael','bf_emma','Ryan','Aiden']='af_heart'
     rate:float=Field(ge=.7,le=1.4,default=1)
+    delivery:Literal['warm','clear','engaging']='warm'
+
+    @model_validator(mode='after')
+    def compatible_voice(self):
+        if self.engine=='qwen' and self.voice not in {'Ryan','Aiden'}:
+            raise ValueError('Choose Aiden or Ryan for the Qwen narrator.')
+        if self.engine=='kokoro' and self.voice in {'Ryan','Aiden'}:
+            raise ValueError('Choose a Kokoro voice for the Kokoro engine.')
+        return self
+
+
+class DraftPreviewRequest(VoiceRequest):
+    engine:Literal['kokoro','qwen']='kokoro'
+    visual_style:Literal['focus','whiteboard']='focus'
+
+
+class PreviewCancellation:
+    """Gracefully stop CLI children, then let media.run enforce termination."""
+    def __init__(self,token,marker):
+        self.token=token
+        self.marker=marker
+        self.requested_at=None
+    def is_set(self):
+        if not self.token.is_set():
+            return False
+        if self.requested_at is None:
+            self.marker.touch()
+            self.requested_at=time.monotonic()
+        return time.monotonic()-self.requested_at>=8
+
+
+@app.post('/api/projects/{project_id}/slides/{number}/preview')
+def preview_slide(project_id:str,number:int,body:DraftPreviewRequest):
+    from scripts.render_draft_preview import source_fingerprint
+    preview_id=uuid.uuid4().hex
+    snapshot={}
+    def validate(p):
+        slide=get_slide(p,number)
+        visual=store.DATA/project_id/'slides'/f'slide-{number}.png'
+        if not slide['narration'].strip():
+            raise HTTPException(400,'Save a narration draft before generating its private preview.')
+        if not slide.get('image') or not visual.is_file():
+            raise HTTPException(400,'Render this slide before generating its private preview.')
+        snapshot.update(project=json.loads(json.dumps(p)),slide=json.loads(json.dumps(slide)),
+                        fingerprint=source_fingerprint(p,slide,visual))
+    def operation(cancel):
+        p=snapshot['project'];slide=snapshot['slide']
+        visual=store.directory(project_id)/'slides'/f'slide-{number}.png'
+        current=store.get(project_id)
+        if source_fingerprint(current,get_slide(current,number),visual)!=snapshot['fingerprint']:
+            raise ValueError('The source or script changed while this preview was queued. Retry the saved revision.')
+        folder=store.directory(project_id)/'draft-previews'/preview_id
+        folder.mkdir(parents=True)
+        paragraphs=narration_paragraphs(slide['narration'])
+        cues=slide.get('visual_cues',[])
+        regions=[{**cue,'paragraph':min(len(paragraphs)-1,max(0,cue.get('paragraph') if cue.get('paragraph') is not None else index*len(paragraphs)//len(cues)))}
+                 for index,cue in enumerate(cues)]
+        direction={'title':slide['title'],'regions':regions,
+                   'timing_note':'Authored paragraph choices are used when present; automatic placement follows paragraph order and is not semantic alignment.'}
+        (folder/'direction.json').write_text(json.dumps(direction),encoding='utf-8')
+        progress(project_id,5,'Creating a private video with a permanent unapproved draft banner')
+        marker=folder/'cancel.requested'
+        command=[sys.executable,str(store.ROOT/'scripts'/'render_draft_preview.py'),
+            '--project-id',project_id,'--slide',str(number),'--engine',body.engine,'--voice',body.voice,
+            '--delivery',body.delivery,'--rate',str(body.rate),'--visual-style',body.visual_style,
+            '--direction',str(folder/'direction.json'),'--output-dir',str(folder),
+            '--expected-revision',str(slide['revision']),'--expected-fingerprint',snapshot['fingerprint'],
+            '--cancel-file',str(marker)]
+        try:
+            from .evaluation import model_slot
+            with model_slot(cancel) if body.engine=='qwen' else nullcontext():
+                media.run(command,PreviewCancellation(cancel,marker),cwd=store.ROOT,timeout=7200)
+        except Exception:
+            media.check(cancel)
+            raise
+        media.check(cancel)
+        manifest=json.loads((folder/'manifest.json').read_text(encoding='utf-8'))
+        duration=manifest.get('duration')
+        if (manifest.get('kind')!='unapproved-draft-preview' or manifest.get('clinical_approval') is not False
+                or manifest.get('revision')!=slide['revision'] or manifest.get('source_fingerprint')!=snapshot['fingerprint']
+                or manifest.get('project_id')!=project_id or manifest.get('slide')!=number
+                or manifest.get('text_sha256')!=hashlib.sha256(slide['narration'].encode('utf-8')).hexdigest()
+                or any(manifest.get(key)!=value for key,value in body.model_dump().items())
+                or not isinstance(duration,(int,float)) or not 0<duration<7200
+                or not manifest.get('quality',{}).get('verified') or not (folder/'presentation.mp4').is_file()):
+            raise ValueError('Draft preview verification failed. No preview was published.')
+        metadata={'id':preview_id,'url':f'/api/projects/{project_id}/draft-previews/{preview_id}/presentation.mp4',
+                  'slide':number,'revision':slide['revision'],'created_at':store.now(),
+                  'engine':body.engine,'voice':body.voice,'delivery':body.delivery,'rate':body.rate,
+                  'visual_style':body.visual_style,'duration':duration,'source_fingerprint':snapshot['fingerprint'],
+                  'clinical_approval':False}
+        with store.edit(project_id) as current:
+            media.check(cancel)
+            saved=get_slide(current,number)
+            if source_fingerprint(current,saved,visual)!=snapshot['fingerprint']:
+                raise ValueError('The source or script changed during this preview. Retry the saved revision.')
+            saved['draft_preview']=metadata
+            current.setdefault('draft_previews',[]).append(metadata)
+            store.event(current,'draft_preview_created',f'Slide {number}, revision {slide["revision"]}; private, permanently marked unapproved.')
+    return submit(project_id,'preview',operation,validate)
+
+
+@app.get('/api/projects/{project_id}/draft-previews/{preview_id}/{filename}')
+def draft_preview_video(project_id:str,preview_id:str,filename:str):
+    import re
+    p=store.get(project_id)
+    if (filename!='presentation.mp4' or not re.fullmatch(r'[a-f0-9]{32}',preview_id)
+            or not any(item.get('id')==preview_id for item in p.get('draft_previews',[]))):
+        raise HTTPException(404,'Private draft preview not found.')
+    root=store.directory(project_id).resolve()
+    path=(root/'draft-previews'/preview_id/'presentation.mp4').resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(404,'This private draft preview is unavailable. Generate a new preview.')
+    return FileResponse(path,media_type='video/mp4')
 
 _preview_lock=threading.Lock()
 
@@ -346,7 +563,7 @@ _preview_lock=threading.Lock()
 def preview_voice(body:VoiceRequest):
     # Fixed, nonclinical audition. Unapproved user scripts never reach this path.
     text="Let's take this one step at a time. A good lesson does more than deliver information. It gives you a moment to notice, to question, and to understand. Ready to try it? Choose a chapter, listen to the explanation, then pause and put the idea into your own words."
-    key=hashlib.sha256(('voice-v2'+json.dumps(body.model_dump(),sort_keys=True)).encode()).hexdigest()
+    key=hashlib.sha256(('voice-v3'+json.dumps(body.model_dump(),sort_keys=True)).encode()).hexdigest()
     folder=store.DATA/'voice-previews'
     folder.mkdir(parents=True,exist_ok=True)
     output=folder/f'{key}.wav'
@@ -354,7 +571,10 @@ def preview_voice(body:VoiceRequest):
         with _preview_lock:
             if not output.is_file():
                 temporary=folder/f'{key}.part.wav'
-                media.synthesize(text,temporary,body.engine,body.rate,threading.Event(),body.voice)
+                if body.engine=='qwen':
+                    media.synthesize(text,temporary,body.engine,body.rate,threading.Event(),body.voice,delivery=body.delivery)
+                else:
+                    media.synthesize(text,temporary,body.engine,body.rate,threading.Event(),body.voice)
                 temporary.replace(output)
     except Exception as exc:
         raise HTTPException(400,str(exc)) from exc
@@ -374,7 +594,7 @@ class ExportRequest(VoiceRequest):
     start:int=Field(ge=1)
     end:int=Field(ge=1)
     burn_captions:bool=True
-    visual_style:Literal['whiteboard','studio']='whiteboard'
+    visual_style:Literal['whiteboard','studio','focus','powerpoint']='whiteboard'
 
 @app.post('/api/projects/{project_id}/export')
 def export(project_id:str,body:ExportRequest):

@@ -4169,3 +4169,210 @@ input[type="range"] {
   color: #c1afcd;
   margin: -6px 0 22px;
 }
+
+/* Source-backed automated review, with no approval grades. */
+.draft-workflow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  margin: 12px 0;
+  color: #bfa7d4;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.draft-workflow > span {
+  min-width: 0;
+}
+.script-evaluation {
+  margin-top: 18px;
+  padding: 15px;
+  background: #231f2d;
+  border: 1px solid #51405f;
+  border-radius: 10px;
+}
+.evaluation-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #d5b6ec;
+}
+.evaluation-heading h3 {
+  font-size: 14px;
+  margin: 0;
+}
+.script-evaluation > p {
+  font-size: 12px;
+  color: #bfaecd;
+  line-height: 1.75;
+  margin: 11px 0;
+}
+.script-evaluation .evaluation-state {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: #e0c69d;
+  font-size: 11px;
+  font-weight: 600;
+}
+.evaluation-report {
+  margin-top: 16px;
+}
+.evaluation-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 10px;
+  color: #b5a0c5;
+  overflow-wrap: anywhere;
+}
+.evaluation-summary {
+  font-size: 12px;
+  line-height: 1.75;
+  color: #d3c0e1;
+  margin: 12px 0;
+}
+.script-evaluation .evaluation-error {
+  color: #f0b9ac;
+  background: #3b2829;
+  border: 1px solid #734841;
+  padding: 10px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.script-evaluation .evaluation-stale {
+  border-left: 3px solid #c4a366;
+  padding-left: 10px;
+  color: #e0c79b;
+}
+.evaluation-findings {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.evaluation-findings > li {
+  border: 1px solid #56415e;
+  border-radius: 7px;
+  margin-top: 9px;
+  background: #2c2335;
+  overflow: hidden;
+}
+.evaluation-findings summary {
+  cursor: pointer;
+  padding: 12px;
+  color: #d6c0e4;
+  line-height: 1.7;
+  font-size: 12px;
+}
+.evaluation-findings summary strong {
+  display: block;
+  font-size: 12px;
+  color: #ecdbf5;
+  margin: 5px 0;
+}
+.finding-severity {
+  font-size: 10px;
+  color: #dcc18f;
+}
+.finding-severity.high {
+  color: #f3b8a4;
+}
+.finding-evidence {
+  padding: 0 12px 12px;
+  font-size: 12px;
+  line-height: 1.75;
+  color: #d6c3e2;
+  overflow-wrap: anywhere;
+}
+.finding-origin {
+  font-size: 10px;
+  color: #b7a1c6;
+}
+.finding-evidence h4 {
+  font-size: 11px;
+  margin: 12px 0 5px;
+  color: #c5a5db;
+}
+.finding-evidence blockquote {
+  margin: 0;
+  padding: 9px 10px;
+  border-left: 2px solid #a078b7;
+  background: #201b28;
+  white-space: pre-wrap;
+  color: #dfcde9;
+}
+.finding-evidence p {
+  font-size: 12px;
+  color: #d0bbdf;
+  margin: 0;
+}
+.evaluation-findings summary:focus-visible {
+  outline: 2px solid #d3aff0;
+  outline-offset: -3px;
+}
+.voice-delivery-help {
+  font-size: 12px;
+  color: #baa9cb;
+  line-height: 1.75;
+  margin: -4px 0 17px;
+}
+.spoken-editing-guide {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 1200px) {
+  .spoken-editing-guide {
+    grid-template-columns: 1fr 1fr;
+  }
+  .spoken-editing-guide > div:last-of-type {
+    grid-column: 1/-1;
+  }
+}
+.native-animation-choice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px;
+  margin: 12px 0 20px;
+  border: 1px solid var(--line, #d7dfdc);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.native-animation-choice input {
+  width: auto;
+  margin-top: 4px;
+}
+.draft-preview-panel {
+  margin-top: 22px;
+  padding: 20px;
+  border: 1px solid var(--line, #393547);
+  border-radius: 16px;
+  background: rgba(158, 129, 196, 0.05);
+}
+.draft-preview-heading {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.draft-preview-heading h3 {
+  margin: 0;
+}
+.draft-preview-panel p {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.draft-preview-panel details {
+  margin: 16px 0;
+}
+.draft-preview-panel summary {
+  cursor: pointer;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.draft-preview-panel video {
+  display: block;
+  width: 100%;
+  border-radius: 10px;
+  background: #111;
+  margin-top: 12px;
+}

@@ -47,6 +47,27 @@ type VisualCue = {
   y: number;
   width?: number;
   height?: number;
+  paragraph?: number;
+};
+type EvaluationFinding = {
+  id?: string;
+  origin?: string;
+  severity?: string;
+  category?: string;
+  message: string;
+  source_quote?: string;
+  draft_quote?: string;
+  remediation?: string;
+  evidence_ids?: string[];
+};
+type ScriptEvaluation = {
+  state?: string;
+  summary?: string;
+  model?: string;
+  assessed_revision?: number;
+  findings?: EvaluationFinding[];
+  clinical_validation?: boolean;
+  requires_practitioner_review?: boolean;
 };
 type Slide = {
   number: number;
@@ -69,6 +90,16 @@ type Slide = {
   visual_text?: string;
   source_reviewed?: boolean;
   ocr?: { text: string; lines: unknown[]; engine: string };
+  evaluation?: ScriptEvaluation | null;
+  evaluation_error?: string | null;
+  draft_preview?: {
+    url: string;
+    revision: number;
+    engine: string;
+    voice: string;
+    delivery: string;
+    duration: number;
+  };
 };
 type Job = {
   status: string;
@@ -83,7 +114,7 @@ type Export = {
   settings: {
     start: number;
     end: number;
-    visual_style?: "whiteboard" | "studio";
+    visual_style?: "whiteboard" | "studio" | "focus" | "powerpoint";
   };
 };
 type Project = {
@@ -109,7 +140,9 @@ type Health = {
   ffmpeg: boolean;
   renderer: boolean;
   renderer_name: string;
+  powerpoint_animation?: boolean;
   kokoro: boolean;
+  qwen_tts?: boolean;
   ocr: boolean;
   piper: boolean;
   windows_voice: boolean;
@@ -123,11 +156,13 @@ const VOICES = [
   ["bf_emma", "British narrator (female)"],
 ] as const;
 const voiceReady = (health: Health | null, engine: string) =>
-  engine === "kokoro"
-    ? !!health?.kokoro
-    : engine === "piper"
-      ? !!health?.piper
-      : engine === "windows" && !!health?.windows_voice;
+  engine === "qwen"
+    ? !!health?.qwen_tts
+    : engine === "kokoro"
+      ? !!health?.kokoro
+      : engine === "piper"
+        ? !!health?.piper
+        : engine === "windows" && !!health?.windows_voice;
 const EMPTY_CHECK: Knowledge = {
   question: "",
   options: ["", "", ""],
@@ -190,13 +225,15 @@ function App() {
   const [model, setModel] = useState(""),
     [engine, setEngine] = useState("kokoro"),
     [voice, setVoice] = useState("af_heart"),
+    [qwenVoice, setQwenVoice] = useState("Aiden"),
+    [delivery, setDelivery] = useState<"warm" | "clear" | "engaging">("warm"),
     [rate, setRate] = useState(1),
     [rangeStart, setRangeStart] = useState(1),
     [rangeEnd, setRangeEnd] = useState(10),
     [burn, setBurn] = useState(true),
-    [visualStyle, setVisualStyle] = useState<"whiteboard" | "studio">(
-      "whiteboard",
-    );
+    [visualStyle, setVisualStyle] = useState<
+      "whiteboard" | "studio" | "focus" | "powerpoint"
+    >("focus");
   const [filter, setFilter] = useState("all"),
     [drag, setDrag] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null),
@@ -209,6 +246,7 @@ function App() {
   loadingRef.current = loading;
   const slide = project?.slides[index];
   const drafting = busy(project) && project?.job.kind === "draft";
+  const evaluating = busy(project) && project?.job.kind === "evaluate";
   const modelAvailable = !!health?.models.includes(model);
   const narrationWordCount = script.trim()
     ? script.trim().split(/\s+/).length
@@ -251,13 +289,15 @@ function App() {
       );
     if (!engineChosen.current) {
       setEngine(
-        h.kokoro
-          ? "kokoro"
-          : h.piper
-            ? "piper"
-            : h.windows_voice
-              ? "windows"
-              : "kokoro",
+        h.qwen_tts
+          ? "qwen"
+          : h.kokoro
+            ? "kokoro"
+            : h.piper
+              ? "piper"
+              : h.windows_voice
+                ? "windows"
+                : "kokoro",
       );
     }
   };
@@ -1455,6 +1495,17 @@ function App() {
                         <strong>{longSentenceCount}</strong>
                         <span>sentences over 26 words</span>
                       </div>
+                      <div>
+                        <strong>
+                          {script.trim()
+                            ? script
+                                .trim()
+                                .split(/\n\s*\n/)
+                                .filter(Boolean).length
+                            : 0}
+                        </strong>
+                        <span>paragraphs</span>
+                      </div>
                       <p>
                         {longSentenceCount
                           ? "Try splitting long sentences into one idea per breath. Read the explanation aloud to check its flow."
@@ -1501,6 +1552,7 @@ function App() {
                           void action(`/slides/${slide.number}/draft`, {
                             model,
                             style: narrationStyle,
+                            workflow: "agents",
                           })
                         }
                       >
@@ -1511,7 +1563,7 @@ function App() {
                         )}
                         {drafting
                           ? "Drafting & reviewing…"
-                          : "Draft a clear explanation"}
+                          : "Build teaching draft"}
                       </button>
                       <button
                         className="button primary compact"
@@ -1520,6 +1572,13 @@ function App() {
                       >
                         Save
                       </button>
+                    </div>
+                    <div className="draft-workflow" aria-label="Draft workflow">
+                      <span>Source analysis</span>
+                      <ArrowRight size={12} />
+                      <span>Teaching draft</span>
+                      <ArrowRight size={12} />
+                      <span>Critic review</span>
                     </div>
                     {drafting && (
                       <p
@@ -1542,11 +1601,117 @@ function App() {
                         " Choose an installed local writing model in Setup & preferences to draft."}
                     </p>
                     <p className="origin">Source: {slide.draft_origin}</p>
+                    <ScriptEvaluationPanel
+                      slide={slide}
+                      edited={sourceDirty || script !== slide.narration}
+                      disabled={
+                        dirty ||
+                        loading ||
+                        busy(project) ||
+                        !modelAvailable ||
+                        !script.trim()
+                      }
+                      evaluating={evaluating}
+                      modelAvailable={modelAvailable}
+                      dirty={dirty}
+                      onEvaluate={() =>
+                        void action(`/slides/${slide.number}/evaluate`, {
+                          model,
+                        })
+                      }
+                    />
+                    <section
+                      className="draft-preview-panel"
+                      aria-label="Private slide preview"
+                    >
+                      <div className="draft-preview-heading">
+                        <MonitorPlay size={20} />
+                        <h3>Hear it. See it. Refine it.</h3>
+                      </div>
+                      <p>
+                        Preview this saved slide with narration and guided
+                        focus. Every frame is marked as an unapproved draft.
+                      </p>
+                      <details>
+                        <summary>
+                          Voice settings ·{" "}
+                          {engine === "qwen" ? qwenVoice : voice} · {delivery}
+                        </summary>
+                        <VoiceControls
+                          health={health}
+                          engine={engine}
+                          voice={engine === "qwen" ? qwenVoice : voice}
+                          delivery={delivery}
+                          rate={rate}
+                          disabled={loading || busy(project)}
+                          onEngine={(value) => {
+                            engineChosen.current = true;
+                            setEngine(value);
+                          }}
+                          onVoice={engine === "qwen" ? setQwenVoice : setVoice}
+                          onDelivery={setDelivery}
+                          onRate={setRate}
+                        />
+                      </details>
+                      <button
+                        className="button secondary"
+                        disabled={
+                          dirty ||
+                          loading ||
+                          busy(project) ||
+                          !slide.image ||
+                          !script.trim() ||
+                          !voiceReady(health, engine) ||
+                          !["qwen", "kokoro"].includes(engine)
+                        }
+                        onClick={() =>
+                          void action(`/slides/${slide.number}/preview`, {
+                            engine,
+                            voice: engine === "qwen" ? qwenVoice : voice,
+                            delivery,
+                            rate,
+                          })
+                        }
+                      >
+                        <Play size={16} />
+                        {busy(project) && project.job.kind === "preview"
+                          ? "Rendering preview…"
+                          : "Create slide preview"}
+                      </button>
+                      {dirty && (
+                        <p className="muted">
+                          Save your changes before generating a preview.
+                        </p>
+                      )}
+                      {slide.draft_preview && (
+                        <>
+                          <p className="muted">
+                            Revision {slide.draft_preview.revision} ·{" "}
+                            {slide.draft_preview.voice} ·{" "}
+                            {Math.round(slide.draft_preview.duration)} seconds
+                            {slide.draft_preview.revision !== slide.revision
+                              ? " · Older revision — regenerate after your changes."
+                              : " · Private draft"}
+                          </p>
+                          <video
+                            key={slide.draft_preview.url}
+                            controls
+                            preload="metadata"
+                            src={slide.draft_preview.url}
+                            aria-label={`Unapproved draft preview of slide ${slide.number}`}
+                          />
+                        </>
+                      )}
+                    </section>
                   </>
                 ) : editorTab === "visual" ? (
                   <VisualStoryEditor
                     key={`${project.id}:${slide.number}`}
                     cues={visualCues}
+                    paragraphs={script
+                      .split(/\n\s*\n/)
+                      .map((p) => p.trim())
+                      .filter(Boolean)}
                     onChange={setVisualCues}
                     placement={cuePlacement}
                     onPlacement={setCuePlacement}
@@ -1716,7 +1881,10 @@ function App() {
                           the slide before approving.
                         </small>
                       )}
-                      <small>Voice and export unlock after approval.</small>
+                      <small>
+                        Full lesson export unlocks after approval. Private draft
+                        previews are available above.
+                      </small>
                     </>
                   )}
                 </div>
@@ -1838,6 +2006,11 @@ function App() {
                   ],
                   [health?.ffmpeg, "Video assembly", "FFmpeg · 1080p H.264"],
                   [
+                    health?.qwen_tts,
+                    "Expressive voice delivery",
+                    "Qwen · local Aiden and Ryan voices",
+                  ],
+                  [
                     health?.ocr,
                     "Image text recognition",
                     "Offline OCR · review extracted text before use",
@@ -1907,14 +2080,16 @@ function App() {
                 <VoiceControls
                   health={health}
                   engine={engine}
-                  voice={voice}
+                  voice={engine === "qwen" ? qwenVoice : voice}
+                  delivery={delivery}
                   rate={rate}
                   disabled={loading || busy(project)}
                   onEngine={(value) => {
                     engineChosen.current = true;
                     setEngine(value);
                   }}
-                  onVoice={setVoice}
+                  onVoice={engine === "qwen" ? setQwenVoice : setVoice}
+                  onDelivery={setDelivery}
                   onRate={setRate}
                 />
                 <label>
@@ -2089,6 +2264,30 @@ function App() {
                   <legend>Visual direction</legend>
                   <div className="output-style-options">
                     <label
+                      className={`output-style-option ${visualStyle === "focus" ? "selected" : ""}`}
+                    >
+                      <input
+                        type="radio"
+                        name="visual-style"
+                        value="focus"
+                        checked={visualStyle === "focus"}
+                        onChange={() => setVisualStyle("focus")}
+                      />
+                      <span
+                        className="style-mini-preview studio-mini"
+                        aria-hidden="true"
+                      >
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <strong>Guided focus</strong>
+                      <span>
+                        Move into each authored detail, pause to explain it,
+                        then return to the whole slide.
+                      </span>
+                    </label>
+                    <label
                       className={`output-style-option ${visualStyle === "whiteboard" ? "selected" : ""}`}
                     >
                       <input
@@ -2138,11 +2337,32 @@ function App() {
                     </label>
                   </div>
                   <p className="muted">
-                    Both styles use your reviewed source visuals. Cues advance
-                    in authored order at evenly spaced intervals. Review their
-                    timing by playing the exported video.
+                    Source styles use your reviewed source visuals. Cues follow
+                    your paragraph assignments in Guided focus and Whiteboard,
+                    or use automatic spacing. Review their timing by playing the
+                    exported video.
                   </p>
                 </fieldset>
+                {health?.powerpoint_animation && (
+                  <label className="native-animation-choice">
+                    <input
+                      type="radio"
+                      name="visual-style"
+                      value="powerpoint"
+                      checked={visualStyle === "powerpoint"}
+                      onChange={() => setVisualStyle("powerpoint")}
+                      disabled={loading || busy(project)}
+                    />
+                    <span>
+                      <strong>Use the deck’s PowerPoint effects</strong>
+                      <br />
+                      Existing animations play automatically and their complete
+                      timeline fits the narration. Slides without effects stay
+                      static. Shape-triggered effects and embedded media require
+                      editing in PowerPoint.
+                    </span>
+                  </label>
+                )}
                 <div className="range-fields">
                   <label>
                     First slide
@@ -2187,14 +2407,16 @@ function App() {
                 <VoiceControls
                   health={health}
                   engine={engine}
-                  voice={voice}
+                  voice={engine === "qwen" ? qwenVoice : voice}
+                  delivery={delivery}
                   rate={rate}
                   disabled={loading || busy(project)}
                   onEngine={(value) => {
                     engineChosen.current = true;
                     setEngine(value);
                   }}
-                  onVoice={setVoice}
+                  onVoice={engine === "qwen" ? setQwenVoice : setVoice}
+                  onDelivery={setDelivery}
                   onRate={setRate}
                 />
                 <label className="checkbox-label">
@@ -2252,7 +2474,8 @@ function App() {
                           start: rangeStart,
                           end: rangeEnd,
                           engine,
-                          voice,
+                          voice: engine === "qwen" ? qwenVoice : voice,
+                          delivery,
                           rate,
                           burn_captions: burn,
                           visual_style: visualStyle,
@@ -2321,6 +2544,183 @@ function App() {
     </div>
   );
 }
+function ScriptEvaluationPanel({
+  slide,
+  edited,
+  disabled,
+  evaluating,
+  modelAvailable,
+  dirty,
+  onEvaluate,
+}: {
+  slide: Slide;
+  edited: boolean;
+  disabled: boolean;
+  evaluating: boolean;
+  modelAvailable: boolean;
+  dirty: boolean;
+  onEvaluate: () => void;
+}) {
+  const report = slide.evaluation,
+    findings = report?.findings || [];
+  const outdated =
+    !!report &&
+    (edited ||
+      (report.assessed_revision !== undefined &&
+        report.assessed_revision !== slide.revision));
+  const label = evaluating
+    ? "Evaluating saved script"
+    : slide.evaluation_error
+      ? "Latest assessment failed"
+      : outdated
+        ? "Assessment out of date"
+        : !report
+          ? "Not assessed"
+          : findings.length
+            ? "Findings to review"
+            : "Practitioner review needed";
+  const categoryNames: Record<string, string> = {
+    quantity: "Quantities and units",
+    qualifier: "Conditions and qualifiers",
+    source_fidelity: "Source fidelity",
+    source_conflict: "Conflicting source details",
+    readability: "Spoken clarity",
+  };
+  return (
+    <section
+      className="script-evaluation"
+      aria-label="Source fidelity evaluation"
+      aria-busy={evaluating}
+    >
+      <div className="evaluation-heading">
+        <ShieldCheck size={18} />
+        <h3>Check source fidelity</h3>
+      </div>
+      <p className="evaluation-state" role="status">
+        {evaluating && <LoaderCircle size={14} className="spin" />}
+        {label}
+      </p>
+      <p>
+        Compare the saved script with its source using local checks and model
+        critique. Findings can miss issues or flag correct wording; compare the
+        cited passages. This assessment does not approve medical content.
+      </p>
+      <button
+        type="button"
+        className="button secondary full"
+        disabled={disabled}
+        onClick={onEvaluate}
+      >
+        {evaluating ? "Evaluating…" : "Evaluate saved script"}
+      </button>
+      {dirty && (
+        <p className="evaluation-hint">
+          Save your edits before evaluating. Existing findings describe the
+          previously saved script and source.
+        </p>
+      )}
+      {!modelAvailable && (
+        <p className="evaluation-hint">
+          Choose an installed local writing model in Setup & preferences.
+        </p>
+      )}
+      {evaluating && (
+        <p className="evaluation-hint">
+          The local reviewer may take several minutes. Your narration stays
+          unchanged.
+        </p>
+      )}
+      {!!slide.evaluation_error && (
+        <p className="evaluation-error" role="alert">
+          {slide.evaluation_error}
+          {report && " The previous assessment remains below."}
+        </p>
+      )}
+      {outdated && (
+        <p className="evaluation-stale">
+          These findings do not assess the current edits. Save and evaluate
+          again before relying on them.
+        </p>
+      )}
+      {report && (
+        <div
+          className={
+            outdated ? "evaluation-report is-stale" : "evaluation-report"
+          }
+        >
+          <div className="evaluation-meta">
+            {report.model && <span>Local model: {report.model}</span>}
+            {report.assessed_revision !== undefined && (
+              <span>Saved revision {report.assessed_revision}</span>
+            )}
+          </div>
+          {report.summary && (
+            <p className="evaluation-summary">{report.summary}</p>
+          )}
+          {findings.length ? (
+            <ol className="evaluation-findings">
+              {findings.map((finding, index) => (
+                <li key={finding.id || index}>
+                  <details open={finding.severity === "high"}>
+                    <summary>
+                      <span
+                        className={`finding-severity ${finding.severity === "high" ? "high" : ""}`}
+                      >
+                        {finding.severity === "high"
+                          ? "High priority"
+                          : finding.severity === "medium"
+                            ? "Review"
+                            : "Consider"}
+                      </span>
+                      <strong>
+                        {categoryNames[finding.category || ""] ||
+                          "Source review"}
+                      </strong>
+                      <span>{finding.message}</span>
+                    </summary>
+                    <div className="finding-evidence">
+                      <span className="finding-origin">
+                        {finding.origin === "deterministic"
+                          ? "Rule-based check"
+                          : finding.origin === "critic"
+                            ? "Local model critique"
+                            : "Automated check"}
+                      </span>
+                      {finding.source_quote && (
+                        <div>
+                          <h4>Source excerpt</h4>
+                          <blockquote>{finding.source_quote}</blockquote>
+                        </div>
+                      )}
+                      {finding.draft_quote && (
+                        <div>
+                          <h4>Script excerpt</h4>
+                          <blockquote>{finding.draft_quote}</blockquote>
+                        </div>
+                      )}
+                      {finding.remediation && (
+                        <div>
+                          <h4>Suggested next edit</h4>
+                          <p>{finding.remediation}</p>
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="evaluation-hint">
+              No specific findings were returned. Check every claim, quantity,
+              and qualifier against the source; the assessment can miss errors.
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ExportVideo({ src, label }: { src: string; label: string }) {
   const video = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
@@ -2478,6 +2878,7 @@ function SlideVisual({
 
 function VisualStoryEditor({
   cues,
+  paragraphs,
   onChange,
   placement,
   onPlacement,
@@ -2487,6 +2888,7 @@ function VisualStoryEditor({
   onSave,
 }: {
   cues: VisualCue[];
+  paragraphs: string[];
   onChange: (cues: VisualCue[]) => void;
   placement: number | null;
   onPlacement: (index: number | null) => void;
@@ -2521,9 +2923,11 @@ function VisualStoryEditor({
       </div>
       <p className="muted">
         Select up to six source regions. Regions reveal in your authored order
-        at evenly spaced intervals. Whiteboard keeps earlier regions visible,
-        then shows the full original; Studio retains the full slide with
-        callouts. Review each label, position, and region against the source.
+        at evenly spaced intervals, or assign a paragraph for narration timing
+        in Guided focus and Whiteboard. Whiteboard keeps earlier regions
+        visible, then shows the full original; Studio retains the full slide
+        with callouts. Review each label, position, and region against the
+        source.
       </p>
       {!hasImage && (
         <p className="muted">Render the slide preview before placing cues.</p>
@@ -2664,6 +3068,28 @@ function VisualStoryEditor({
                 {cue.label.length} / {CUE_LABEL_LIMIT}
               </span>
             </label>
+            <label>
+              Start with narration paragraph
+              <select
+                value={cue.paragraph ?? "auto"}
+                onChange={(event) =>
+                  update(index, {
+                    paragraph:
+                      event.target.value === "auto"
+                        ? undefined
+                        : Number(event.target.value),
+                  })
+                }
+              >
+                <option value="auto">Automatic spacing</option>
+                {paragraphs.map((paragraph, paragraphIndex) => (
+                  <option key={paragraphIndex} value={paragraphIndex}>
+                    {paragraphIndex + 1}. {paragraph.slice(0, 75)}
+                    {paragraph.length > 75 ? "…" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="cue-coordinate-fields">
               <label>
                 Horizontal %
@@ -2778,19 +3204,23 @@ function VoiceControls({
   health,
   engine,
   voice,
+  delivery,
   rate,
   disabled,
   onEngine,
   onVoice,
+  onDelivery,
   onRate,
 }: {
   health: Health | null;
   engine: string;
   voice: string;
+  delivery: "warm" | "clear" | "engaging";
   rate: number;
   disabled: boolean;
   onEngine: (value: string) => void;
   onVoice: (value: string) => void;
+  onDelivery: (value: "warm" | "clear" | "engaging") => void;
   onRate: (value: number) => void;
 }) {
   const [preview, setPreview] = useState<{ key: string; url: string } | null>(
@@ -2799,7 +3229,7 @@ function VoiceControls({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const request = useRef<AbortController | null>(null);
-  const previewKey = `${engine}:${voice}:${rate}`;
+  const previewKey = `${engine}:${voice}:${rate}:${delivery}`;
   useEffect(() => {
     request.current?.abort();
     request.current = null;
@@ -2820,7 +3250,7 @@ function VoiceControls({
     try {
       const result = await api<{ url: string }>("/voice-preview", {
         method: "POST",
-        body: JSON.stringify({ engine, voice, rate }),
+        body: JSON.stringify({ engine, voice, rate, delivery }),
         signal: controller.signal,
       });
       if (request.current !== controller) return;
@@ -2852,6 +3282,9 @@ function VoiceControls({
           disabled={disabled}
           onChange={(event) => onEngine(event.target.value)}
         >
+          <option value="qwen" disabled={!health?.qwen_tts}>
+            Qwen · expressive local voice
+          </option>
           <option value="kokoro" disabled={!health?.kokoro}>
             Kokoro · expressive narration
           </option>
@@ -2863,6 +3296,39 @@ function VoiceControls({
           </option>
         </select>
       </label>
+      {engine === "qwen" && (
+        <>
+          <label>
+            Narrator voice
+            <select
+              value={voice}
+              disabled={disabled}
+              onChange={(event) => onVoice(event.target.value)}
+            >
+              <option value="Aiden">Aiden</option>
+              <option value="Ryan">Ryan</option>
+            </select>
+          </label>
+          <label>
+            Voice delivery
+            <select
+              value={delivery}
+              disabled={disabled}
+              onChange={(event) =>
+                onDelivery(event.target.value as "warm" | "clear" | "engaging")
+              }
+            >
+              <option value="warm">Warm</option>
+              <option value="clear">Clear</option>
+              <option value="engaging">Engaging</option>
+            </select>
+          </label>
+          <p className="voice-delivery-help">
+            Delivery guides the local voice. Audition the sample, then listen to
+            medical terms and pacing in the final lesson.
+          </p>
+        </>
+      )}
       {engine === "kokoro" && (
         <label>
           Narrator voice
@@ -2880,7 +3346,16 @@ function VoiceControls({
         </label>
       )}
       <label>
-        Narration pace <span className="voice-rate">{rate.toFixed(2)}×</span>
+        Narration pace{" "}
+        <span className="voice-rate">
+          {engine === "qwen"
+            ? rate < 0.95
+              ? "Slower"
+              : rate > 1.05
+                ? "Brisk"
+                : "Natural"
+            : `${rate.toFixed(2)}×`}
+        </span>
         <input
           type="range"
           min="0.7"
@@ -2888,7 +3363,15 @@ function VoiceControls({
           step="0.05"
           value={rate}
           disabled={disabled}
-          aria-valuetext={`${rate.toFixed(2)} times normal speed`}
+          aria-valuetext={
+            engine === "qwen"
+              ? rate < 0.95
+                ? "Slower delivery guidance"
+                : rate > 1.05
+                  ? "Brisk delivery guidance"
+                  : "Natural delivery guidance"
+              : `${rate.toFixed(2)} times normal speed`
+          }
           onChange={(event) => onRate(Number(event.target.value))}
         />
       </label>

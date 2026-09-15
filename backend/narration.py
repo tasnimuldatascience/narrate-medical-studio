@@ -3,6 +3,7 @@ import re
 from typing import Literal
 import httpx
 from pydantic import BaseModel, Field
+from .ollama_schema import transport_schema
 
 OLLAMA = 'http://127.0.0.1:11434'
 PROMPT_VERSION = 'medical-source-v5-editor'
@@ -249,8 +250,8 @@ def generate(slide, model, audience, style:Literal['conversational','concise']='
                 r'^\s*FROM\s+\S*cloud\S*', metadata.get('modelfile',''), re.I | re.M):
             raise ValueError('Remote-backed models are disabled. Choose a fully local model.')
         check_cancel()
-        response = client.post(OLLAMA+'/api/generate',json={'model':model,'stream':False,'think':False,
-            'format':ModelDraft.model_json_schema(),'system':SYSTEM,
+        response = client.post(OLLAMA+'/api/generate',json={'model':model,'stream':False,'think':False,'keep_alive':0,
+            'format':transport_schema(ModelDraft),'system':SYSTEM,
             'options':{'temperature':0.7,'top_p':0.8,'top_k':20,'min_p':0,'presence_penalty':1.5,'repeat_penalty':1,'seed':42,'num_predict':3000,'num_ctx':8192},
             'prompt':json.dumps({'audience':audience,'delivery_style':style,
                 'editing_instruction':STYLE_INSTRUCTIONS[style],'source':source},ensure_ascii=False)})
@@ -263,8 +264,8 @@ def generate(slide, model, audience, style:Literal['conversational','concise']='
         if len(EDITOR)+len(editor_prompt)>40000:
             raise ValueError('The combined source, draft, and diagnostics are too large for the editor. Split this slide into smaller sections before drafting.')
         check_cancel()
-        response=client.post(OLLAMA+'/api/generate',json={'model':model,'stream':False,'think':False,
-            'format':ModelDraft.model_json_schema(),'system':EDITOR,
+        response=client.post(OLLAMA+'/api/generate',json={'model':model,'stream':False,'think':False,'keep_alive':0,
+            'format':transport_schema(ModelDraft),'system':EDITOR,
             'options':{'temperature':0.7,'top_p':0.8,'top_k':20,'min_p':0,'presence_penalty':1.5,'repeat_penalty':1,'seed':43,'num_predict':3500,'num_ctx':16384},
             'prompt':editor_prompt})
         check_cancel()

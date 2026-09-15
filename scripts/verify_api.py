@@ -25,7 +25,7 @@ BASE='http://127.0.0.1:8765'
 NAME='Learning loop - software demo.pptx'
 REVIEWER='Synthetic software validation'
 SETTINGS={'start':1,'end':3,'engine':'kokoro','voice':'af_heart','rate':.96,
-          'burn_captions':True,'visual_style':'whiteboard'}
+          'burn_captions':True,'visual_style':'whiteboard','delivery':'warm'}
 QUIZ={
     'question':'After recalling the idea in your own words, what comes next?',
     'options':['Compare it with the source','Only reread the title','Skip the explanation'],

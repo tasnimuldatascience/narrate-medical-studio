@@ -140,7 +140,7 @@ def paint(base, source, cues, regions, completed, active=None, fraction=1., over
 
 
 def render_whiteboard(source_path, output_path, lesson_title, slide_title, number,
-                      total, cues, duration, ffmpeg, cancel, run, captions=None):
+                      total, cues, duration, ffmpeg, cancel, run, captions=None,cue_starts=None):
     from .media import check
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError('Whiteboard duration must be positive.')
@@ -161,9 +161,11 @@ def render_whiteboard(source_path, output_path, lesson_title, slide_title, numbe
     else:
         lead = min(.9, duration*.12)
         overview_time = min(1.8, duration*.15)
-        slot = (duration-lead-overview_time)/len(cues)
-        frame(paint(base, source, cues, regions, 0), lead)
+        from .scene_timing import scene_spans
+        lead,slots,overview_time=scene_spans(duration,len(cues),cue_starts,lead=lead,tail=overview_time)
+        frame(paint(base, source, cues, regions, 0,overview=cue_starts is not None), lead)
         for i in range(len(cues)):
+            slot=slots[i]
             reveal = min(.5, slot*.3)
             for step in range(1, 7):
                 frame(paint(base, source, cues, regions, i, i, step/6), reveal/6)

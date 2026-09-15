@@ -133,7 +133,12 @@ def split_caption_cues(blocks):
             start = end
     return result
 
-def synthesize(text, output, engine, rate, cancel, voice='af_heart'):
+def synthesize(text, output, engine, rate, cancel, voice='af_heart', *, delivery='warm'):
+    if engine == 'qwen':
+        from .qwen_voice import synthesize as qwen_synthesize
+        from .evaluation import model_slot
+        with model_slot(cancel):
+            return qwen_synthesize(text,output,voice,rate,cancel,style=delivery)
     if engine == 'kokoro':
         from .voice import synthesize as kokoro_synthesize
         return kokoro_synthesize(text,output,voice,rate,cancel)
@@ -271,6 +276,7 @@ def export(project, folder, settings, cancel, progress):
         raise ValueError('FFprobe is required to verify the generated video. Install it with FFmpeg.')
     all_cues, elapsed, segments, chapters, audio_parts = [], 0., [], [], []
     all_transcript = []
+    native_reports = []
     for index, slide in enumerate(selected):
         check(cancel)
         n = slide['number']
@@ -279,7 +285,8 @@ def export(project, folder, settings, cancel, progress):
             raise ValueError(f'Slide {n} has no rendered preview. Render slides first.')
         progress(round(index/len(selected)*90),f'Creating voice and video for slide {n}')
         wav = folder/f'slide-{n}.wav'
-        cues, duration = synthesize(slide['narration'], wav, settings['engine'],settings['rate'],cancel,settings.get('voice','af_heart'))
+        delivery = {'delivery': settings.get('delivery','warm')} if settings['engine']=='qwen' else {}
+        cues, duration = synthesize(slide['narration'], wav, settings['engine'],settings['rate'],cancel,settings.get('voice','af_heart'),**delivery)
         speech_duration = duration
         speech_blocks = [dict(cue) for cue in cues]
         cues = split_caption_cues(cues)
@@ -302,13 +309,31 @@ def export(project, folder, settings, cancel, progress):
         duration = math.ceil(duration*24)/24
         local = folder/f'part-{n}'
         local.mkdir(exist_ok=True)
-        write_captions(cues,local,light=settings.get('visual_style','whiteboard')=='whiteboard')
+        write_captions(cues,local,light=settings.get('visual_style','whiteboard') in {'whiteboard','focus'})
         segment = f'segment-{n}.mp4'
-        if settings.get('visual_style','whiteboard') == 'whiteboard':
+        if settings.get('visual_style') == 'powerpoint':
+            from .ppt_animation import render_slide
+            native=local/'native.mp4'
+            report=render_slide(folder.parent/'safe.pptx',n,native,duration,cancel)
+            native_reports.append({'slide':n,**report})
+            (local/'native-timing.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+            filters='fps=24'+(f',ass=part-{n}/captions.ass' if settings['burn_captions'] else '')
+            run([ffmpeg,'-y','-v','error','-i',f'part-{n}/native.mp4','-vf',filters,
+                '-an','-c:v','libx264','-preset','fast','-crf','18','-pix_fmt','yuv420p',segment],cancel,cwd=folder)
+        elif settings.get('visual_style') == 'focus':
+            from .focus_motion import render_focus
+            from .scene_timing import paragraph_cue_starts
+            region_starts=paragraph_cue_starts(slide['narration'],slide.get('visual_cues',[]),speech_blocks,duration,speech_lead=lead,style='focus')
+            render_focus(visual,folder/segment,project['name'],slide['title'],index+1,
+                len(selected),slide.get('visual_cues',[]),duration,ffmpeg,cancel,run,
+                captions=f'part-{n}/captions.ass' if settings['burn_captions'] else None,**({'cue_starts':region_starts} if region_starts is not None else {}))
+        elif settings.get('visual_style','whiteboard') == 'whiteboard':
             from .whiteboard import render_whiteboard
+            from .scene_timing import paragraph_cue_starts
+            region_starts=paragraph_cue_starts(slide['narration'],slide.get('visual_cues',[]),speech_blocks,duration,speech_lead=lead,style='whiteboard')
             render_whiteboard(visual,folder/segment,project['name'],slide['title'],index+1,
                 len(selected),slide.get('visual_cues',[]),duration,ffmpeg,cancel,run,
-                captions=f'part-{n}/captions.ass' if settings['burn_captions'] else None)
+                captions=f'part-{n}/captions.ass' if settings['burn_captions'] else None,**({'cue_starts':region_starts} if region_starts is not None else {}))
         else:
             from .compositor import compose_slide,compose_title
             compose_slide(visual,folder/f'scene-{n}.png',project['name'],slide['title'],index+1,len(selected))
@@ -340,6 +365,10 @@ def export(project, folder, settings, cancel, progress):
     run([ffmpeg,'-y','-v','error','-f','concat','-safe','0','-i','concat.txt','-i','narration.wav','-i','captions.srt','-map','0:v','-map','1:a','-map','2:0','-c:v','copy','-c:a','aac','-b:a','192k','-ar','48000','-c:s','mov_text','-metadata:s:s:0','language=eng','-movflags','+faststart','presentation.mp4'],cancel,cwd=folder)
     (folder/'chapters.json').write_text(json.dumps(chapters,indent=2),encoding='utf-8')
     audit = audit_video(folder,elapsed,cancel)
+    from .audio_quality import inspect_audio
+    audit['audio']=inspect_audio(folder/'narration.wav')
+    if native_reports:
+        audit['powerpoint_animation']=native_reports
     audit['caption_timing']='Character-proportional estimates within measured natural speech blocks; not word-aligned timestamps.'
     (folder/'quality.json').write_text(json.dumps(audit,indent=2),encoding='utf-8')
     (folder/'transcript.txt').write_text('\n\n'.join(f'Slide {s["number"]}: {s["title"]}\n{s["narration"]}' for s in selected),encoding='utf-8')

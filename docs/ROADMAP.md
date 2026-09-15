@@ -4,6 +4,10 @@ The working release proves the workstation workflow. A professional medical educ
 
 ## Implemented in the development release
 
+- Checkpointed source/teacher/critic roles, bounded revision and re-audit, source-linked evaluation of saved scripts, source/model fingerprinted resume, and deterministic checks against revision regressions.
+- Optional isolated Qwen3-TTS 1.7B CustomVoice with delivery presets; actual 64.44-second supplied-slide narration fits the development workstation's 8 GB GPU. Listening quality remains to be assessed.
+- Guided-focus camera motion, supported native PowerPoint animation export, and measured PCM audio checks. See `VOICE_AND_MOTION.md` for timing and platform limits.
+
 - Cinematic React studio with source review, scene navigation, local voice auditions, and explicit output-style selection.
 - Kokoro thought/paragraph-block synthesis with four narrator choices; optional Piper/Windows alternatives.
 - Up to six manually authored source regions per slide, editable sequence and 120-character labels. Label, position, size, and sequence edits reset review.

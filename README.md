@@ -1,6 +1,6 @@
 # Narrate Medical Studio
 
-A local application for turning medical PowerPoint presentations into reviewed narration, captioned video, and interactive learning packages. Built with React, TypeScript, Vite, FastAPI, SQLite, Ollama, Kokoro, optional Piper, and FFmpeg.
+A local application for turning medical PowerPoint presentations into reviewed narration, captioned video, and interactive learning packages. Built with React, TypeScript, Vite, FastAPI, SQLite, Ollama, optional Qwen3-TTS, Kokoro/Piper, and FFmpeg.
 
 **Status: working development release, not a validated clinical product.** The workflow accepts different presentations and specialties. The supplied injection decks are test inputs, not hard-coded templates. No presentation content is submitted to a cloud API by this application.
 
@@ -9,19 +9,21 @@ A local application for turning medical PowerPoint presentations into reviewed n
 - Import `.pptx` and `.pptm`, inspect slide text, notes, editable tables, image counts, and reference URLs.
 - Render high-resolution slide previews using installed Microsoft PowerPoint on Windows, with macros disabled and a sanitized rendering copy.
 - Transcribe rendered image-only slides with local RapidOCR. Inspect the proposed text, recognition confidence, and number/unit warnings under **Source > Image text**, correct it against the slide, and explicitly mark the transcription checked.
-- Review original visuals beside the script. Local Ollama first drafts an explanation, then performs a separate editorial pass comparing the draft with the supplied source. Authors can also edit text directly. This two-pass workflow remains under evaluation; it does not confer clinical approval.
+- Review original visuals beside the script. Checkpointed local roles assemble source evidence, draft a spoken explanation and critique it against the original. A bounded revision is re-audited and rejected if it adds detectable numeric/qualifier problems. Authors can edit directly and evaluate a saved script. Model findings require judgment; they do not confer clinical approval.
 - Flag numerical content, limited sources, unreadable characters, tables, image interpretation, and model-reported uncertainty.
 - Use a cinematic production workspace with source/script review, scene navigation, accessible dialogs, and explicit readiness feedback.
 - Add source-grounded multiple-choice knowledge checks with feedback.
 - Author up to six labeled source regions per slide. Set their order, center, width, and height against the actual slide preview; regions are clipped at image edges.
-- Choose **Whiteboard** to reveal authored source regions progressively and finish on the original slide, or **Studio** to retain the full slide with timed callouts. Slides without cues show their full source visual. These are animations of existing source material, not generated medical anatomy.
-- Audition four local Kokoro narrators using a fixed nonmedical sample in Setup or the export dialog. Kokoro synthesizes complete thoughts/paragraph blocks rather than each subtitle fragment; Piper and Windows voice remain alternatives.
+- Choose **Guided focus**, **Whiteboard**, **Studio**, or supported native **PowerPoint effects**. Source styles use authored regions; slides without cues show their full source. Native mode preserves supported existing effects with documented timing changes. These modes animate existing source material.
+- Audition Qwen Aiden/Ryan with delivery presets or four Kokoro narrators. Speech is generated in complete thought groups; Piper and Windows voice remain alternatives. Generate a permanently marked private video preview of a saved slide before approving a full lesson.
 - Record a named review of each slide revision. Any script, question, cue label, cue position, region size, cue order, or source-transcription change resets approval. The backend blocks export of unapproved slides and blocks approval when populated image text has not been checked.
 - Export any approved slide range as 1080p H.264/AAC MP4, SRT captions, transcript, review manifest, and a self-contained interactive lesson ZIP.
 - Interactive lessons include chapters, transcript search and seeking, playback speeds, knowledge checks, and progress feedback. Extract the ZIP and open `index.html`; no server is required.
 - Store projects, reviews, jobs, model output, and exports in local SQLite/files. Interrupted jobs can be retried.
 
 ## Run on this Windows machine
+
+New in the editorial milestone: **Build teaching draft** runs checkpointed source, teacher and critic roles with bounded revision; **Evaluate script** shows source-linked findings without changing the script. Optional **Qwen3-TTS** adds expressive delivery presets. **Guided focus** animates authored detail regions, and native PowerPoint export supports effects already present in a deck. See [voice and motion setup](docs/VOICE_AND_MOTION.md) and [implemented architecture](docs/MULTI_AGENT_ARCHITECTURE.md). These features remain subject to the documented clinical, listening and deployment release gates.
 
 From PowerShell in the repository:
 
@@ -68,11 +70,11 @@ The UI's Setup page reports renderer, video, voice, OCR, and local model availab
 1. Import your presentation and render its previews.
 2. Set the specialty and learner audience under Setup.
 3. Inspect each visual and its extracted source. For image-only content, open **Source > Image text**, run local OCR, and correct the transcription against the rendered slide. Check numbers, decimals, units, labels, and reading order; recognition confidence does not measure medical accuracy. Mark the image text checked only after comparison. Running OCR again retains existing authored image text; review the new OCR result before replacing your corrections.
-4. Draft or edit a concise spoken explanation. Local drafting uses two calls: an initial draft and an editorial/source-comparison pass. Review their flags and compare the resulting narration with notes, extracted text, and checked image text. Resolve disagreements explicitly; a smoother rewrite does not resolve a source conflict. The current `medical-source-v5-editor` prompt is under evaluation and has no general quality-pass claim.
+4. Draft or edit a concise spoken explanation. **Build teaching draft** runs the source, teacher and critic workflow; **Evaluate saved script** critiques an existing script without rewriting it. Compare findings with the original evidence: the model may flag correct wording or miss problems. Resolve source disagreements explicitly.
 5. Optionally add a question, three choices, the correct answer, and a source-grounded explanation.
 6. In **Visual story**, explicitly place source regions by clicking the preview or entering percentages. Add reviewed labels, adjust the region width/height, and order the reveals. No clinical region is chosen automatically. Labels support up to 120 characters; each region dimension is 2–100% of the source image (initial size 24%).
 7. Save and verify claims, quantities, terminology, questions, labels, and selected source regions. Approve that revision by name. Editing these items or changing the source transcription/check state resets narration approval; review or regenerate the explanation against the changed source.
-8. Choose an approved slide range, Whiteboard or Studio visual direction, narrator, pace, and caption preference. Use **Preview voice** to audition the fixed sample before exporting. Its sample contains no project narration.
+8. Use **Create slide preview** to review a saved slide's narration and motion with a permanent draft banner. For a released lesson, choose an approved range, visual direction, narrator, delivery, pace and caption preference. **Preview voice** uses a fixed nonmedical sample; it is separate from the saved-slide preview.
 9. Inspect the final video, source-region reveals, voice pronunciation, caption timing, and interactive package before distributing it.
 
 Kokoro voices: `af_heart` (Warm American, female), `af_bella` (Conversational American, female), `am_michael` (Clear American, male), and `bf_emma` (British narrator, female). The default is `af_heart` when Kokoro is available.

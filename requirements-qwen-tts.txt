@@ -1,0 +1,3 @@
+# Optional isolated voice environment only. Install matching CUDA torch and
+# torchaudio first with scripts/setup_qwen_voice.py --install-runtime.
+qwen-tts==0.1.1
