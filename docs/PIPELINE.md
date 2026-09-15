@@ -1,82 +1,161 @@
 # Application pipeline
 
-All processing below runs on the workstation after dependency and model setup.
+This document describes the implemented workstation pipeline. All content processing runs locally after dependencies and models have been installed.
+
+## End-to-end flow
 
 ```mermaid
 flowchart TD
-    A[Import PPTX or PPTM] --> B[Validate archive and sanitize a rendering copy]
-    B --> C[Extract text, notes, tables and references]
-    B --> D[Render source slides with PowerPoint]
-    D --> O[Optional local OCR transcription]
-    O --> P[Author corrects image text and checks against slide]
-    C --> E[Hash original source evidence]
-    P --> E
-    E --> T[Local teacher: draft and spoken edit]
-    T --> Q[Two independent complete source and draft alignments]
-    Q --> R[Challenge proposals using stored evidence passages]
-    D --> F[Practitioner edits the lesson]
-    R --> F
-    F --> G[Author source regions and knowledge checks]
-    G --> H[Approve the exact revision]
-    H --> I[Local Qwen expressive voice or Kokoro/Piper/Windows]
-    I --> J[Estimate short captions within measured speech blocks]
-    J --> K[Guided focus / Whiteboard / Studio / native PPT effects]
-    K --> L[FFmpeg encodes 1080p video]
-    L --> M[FFprobe timing and PCM audio checks]
-    M --> N[MP4 and offline interactive lesson ZIP]
+    Upload[Upload PPTX or PPTM] --> Validate[Validate archive and sanitize a rendering copy]
+    Validate --> Extract[Extract text, notes, tables, and references]
+    Validate --> Slides[Render slide images]
+    Slides --> OCR[Optional local OCR]
+    OCR --> SourceCheck[Practitioner checks transcription]
+    Extract --> Evidence[Build hashed evidence packet]
+    SourceCheck --> Evidence
+    Evidence --> Draft[Local teaching draft and spoken edit]
+    Draft --> Eval[Two alignments and proposal challenge]
+    Eval --> Edit[Practitioner edits script, question, and visual cues]
+    Slides --> Edit
+    Edit --> Approve[Approve exact slide revision]
+    Approve --> Speech[Local voice synthesis]
+    Speech --> Timing[Measured speech blocks and estimated captions]
+    Timing --> Scenes[Guided focus, Whiteboard, Studio, or native effects]
+    Scenes --> Encode[FFmpeg 1080p encode]
+    Encode --> QA[FFprobe and package checks]
+    QA --> Output[MP4, transcript, captions, and offline ZIP]
 ```
 
-## Source and review
+## 1. Import and sanitization
 
-**Create slide preview** runs the saved source/script through a private, permanently watermarked video job before clinical approval. It stores only a revision-bound preview record and never changes narration, source review or approval. The API exposes only successfully verified, registered MP4 previews; incomplete jobs and arbitrary project files are not downloadable. This path does not create a released lesson ZIP.
+The API accepts `.pptx` and `.pptm` up to 150 MB. It validates the ZIP container and rejects unsafe XML before extraction. The original upload is preserved locally.
 
-The editor's **Build teaching draft** explicitly selects the multi-role workflow. The API retains its legacy two-pass default for older clients; pass `workflow: "agents"` for the checkpointed workflow. **Evaluate script** assesses the current saved script without rewriting it or changing approval. Evaluation requires visible image text for image-only slides. Models cite exact stored source/draft passage IDs; application code supplies the quotations. Empty findings mean “needs review,” never “clinically passed.” Source/script edits invalidate assessments.
+Rendering operates on a separate safe copy. The sanitization step removes macros, active embedded objects, and external relationships while keeping the content needed for static rendering. The original presentation is never modified.
 
-Role artifacts are local JSON with atomic writes and hashed inputs under `data/<project>/agent-runs/<run>/<fingerprint>/`. Matching completed stages can resume after failure. Source/script hashes, revision, model identity/digest, evaluator code, prompts, options and style prevent stale reuse. These are bounded editorial checkpoints, not a distributed production scheduler.
+`backend/extract.py` reads native slide text, speaker notes, tables, image counts, and reference relationships. Each source retains its type and location.
 
-The uploaded original is retained locally. Conversion operates on a copy with macros, active embedded content, and external relationships removed. OOXML extraction reads editable text, notes, and tables. A separate optional OCR step transcribes rendered slide images; neither step interprets anatomy or checks medical validity.
+## 2. Slide rendering and OCR
 
-Under **Source > Image text**, run OCR and compare its proposed text with the actual slide. Correct spelling, reading order, numbers, units, and labels, then explicitly mark the transcription checked. OCR returns line confidence and normalized image boxes; its confidence is a recognition score, not confidence in a medical claim. Its result and the author's editable image text are stored separately. A later OCR run does not overwrite existing authored image text.
+The tested Windows path uses Microsoft PowerPoint to render high-resolution slide images. LibreOffice can be selected with `NARRATE_SOFFICE`, but cross-platform behavior is not yet validated to the same level.
 
-Drafting also runs OCR automatically when a rendered image-only slide has neither native text nor a saved transcription. It commits the detected source and narration together only after both writing passes succeed. Cancellation or a model failure preserves the previous script and source. The new transcription remains unchecked.
+RapidOCR runs locally through ONNX Runtime for image-heavy slides. `scripts/download_ocr.py` prepares and verifies the assets bundled with the pinned dependency. Runtime downloads are disabled.
 
-RapidOCR 3.9.2 runs its small PP-OCRv6 detector/recognizer and orientation classifier locally through ONNX Runtime. `scripts/download_ocr.py` prepares the assets already bundled in the installed, pinned RapidAI wheel and extracts the embedded character dictionary. Model and dictionary hashes are checked before use. Runtime model/dictionary/font downloads are disabled; only known project slide PNGs are accepted, and decoded pixels are passed into the dependency. OCR readiness is reported in Setup. A current native inference call must finish before cancellation is acknowledged.
+OCR produces candidate lines, normalized image boxes, and recognition confidence. It does not update practitioner-authored image text automatically. The author compares the result with the rendered slide, fixes reading order, punctuation, terminology, values, and units, then explicitly marks it checked.
 
-The author supplies diagram regions, labels, narration, and any assessment. An edit to narration, a question, a visual region, or the source transcription/check state invalidates narration approval. Populated image text must be checked before a slide can be approved. The API checks slide revisions to prevent stale browser windows overwriting newer reviews. Export snapshots the reviewed lesson and writes its source hash, image transcription/check state, settings, review metadata, and quality results into a manifest.
+## 3. Evidence packet
 
-## Spoken narration editing
+The application builds an evidence packet from native text, notes, table cells, and authored image transcription. Entries receive stable IDs and locations. The packet hash includes the source deck and rendered image identity, so stale assessments cannot be reused after source changes.
 
-The teacher stage makes two Ollama generation calls. The first produces a spoken draft from extracted text, speaker notes, tables, and available image transcription. The second performs an editorial pass against those same sources, checking wording while improving sentence structure. Sources and the initial draft are treated as untrusted data, not instructions. The checkpointed workflow then evaluates the candidate against original evidence. This later evaluation never triggers another medical rewrite.
+Image transcription, its review state, and editorial revision remain visible. A source conflict is preserved rather than silently resolved.
 
-Evidence review first assigns immutable passage IDs and exact offsets. Two complete alignment passes see the entire source and draft with different instructions/seeds; neither sees the other's output. Proposed discrepancies are then challenged against the complete evidence. Unique IDs, complete coverage and the original comparison anchors must survive validation. Source conflicts retain both sides. At most one schema/reference repair is allowed per stage; malformed or incomplete review output remains a failure.
+## 4. Teaching draft
 
-Reports distinguish potential discrepancies, unresolved comparisons, refuted proposals and lexical/readability hints. The deterministic exact-text omission guard normalizes whitespace only: case-sensitive units and ambiguous range/minus notation are not equated. A conservative UTF-8 byte bound reserves input and response space in the model context, caps output tokens, and rejects insufficient room before model access. These constraints protect evidence integrity; they do not make a model's interpretation clinically correct.
+`Build teaching draft` invokes the checkpointed local workflow. The teacher produces a source-bound spoken explanation for the configured audience and specialty. A second local editorial pass improves spoken structure while receiving the same source.
 
-The current prompt version is `medical-source-v5-editor`; it is still being evaluated. An editorial pass or favorable readability score does not establish that the output preserves every fact. Authors must compare the final script with all accepted source material, especially where notes qualify or contradict visible slide text. An unresolved disagreement needs an explicit author decision, not an automatic choice of whichever wording sounds clearer.
+Stage outputs live under:
 
-`qwen3.5:9b` is installed and tuned on the development workstation as a higher-capacity local writing option. The lighter `qwen3:4b` has shown qualifier-preservation errors in evaluation. No general narration-quality pass is claimed for either model. Model speed and suitability depend on the workstation; source fidelity and spoken clarity require separate review.
+```text
+data/<project-id>/agent-runs/<run-id>/<fingerprint>/
+```
 
-## Voice and timing
+Atomic writes and input fingerprints allow completed stages to be reused only when the source, revision, local model digest, prompts, options, and code still match. Empty, malformed, truncated, or mismatched output fails the stage. There is no cloud or substitute-model fallback.
 
-Kokoro runs from pinned local ONNX and voice-bank files. Complete thoughts are synthesized together so subtitle lengths do not cause clipped, repetitive speech. Four narrator presets and a pace control are available. The voice audition uses a fixed nonmedical script.
+## 5. Evidence review
 
-Audio duration is measured from generated PCM. Short caption boundaries are estimated proportionally within the measured speech passages; they are not forced-aligned word timestamps. Per-slide PCM is padded to video frame boundaries and joined before one AAC encode, preventing cumulative padding drift.
+`Evaluate saved script` inspects narration without changing it. Source and draft are divided into exact passages with immutable IDs and offsets.
 
-Optional Qwen3-TTS CustomVoice adds expressive local narration; see [VOICE_AND_MOTION.md](VOICE_AND_MOTION.md). Voicebox is not integrated. Piper and Windows speech are alternative installed engines.
+The protocol runs two complete alignments. The second receives the same evidence but does not receive the first result. Proposed discrepancies from either pass then receive a challenge pass. The schema requires one source check for every source passage and one draft check for every draft passage.
 
-## Visuals and interaction
+The model selects only passage IDs and a single comparison/verdict value. Application code derives status and retrieves exact quotations. This prevents fabricated displayed quotes and contradictory reason/status fields. Integrity checks require valid unique references, complete coverage, relevant changed-claim anchors, and both sides of a source conflict.
 
-Whiteboard reveals authored source regions and ends on the full source. Guided focus moves into those regions and returns to context. Both support uniform spacing or authored paragraph starts matched to measured speech blocks. Studio preserves the complete slide with timed callouts and chapter cards. Native PowerPoint mode renders supported existing effects separately. These modes do not generate medical anatomy or infer procedural movements.
+At most one bounded schema repair is allowed per stage. It repairs malformed review output only. It does not alter medical content.
 
-The exported learner page contains chapter navigation, searchable and seekable transcript, caption controls, playback speed, questions with explanations, and session-only reflection notes/progress. Its HTML, media, caption data, and code are packaged together without remote libraries.
+The output distinguishes potential findings, uncertainty, refuted proposals, and deterministic editing hints. Findings cannot trigger an automatic medical rewrite, approval, or publication. Live validation still found false findings on unchanged quantities; every result requires human comparison with the source.
 
-## Verification used during development
+## 6. Authoring and approval
 
-1. Automated source-validation, revision, approval, concurrency, caption, region, packaging, and OCR tests, including actual OCR inference with Python networking and dependency downloads blocked.
-2. TypeScript checking, production build, and formatting checks.
-3. Synthetic PowerPoint → real renderer → real neural speech → both video styles.
-4. Live HTTP workflow through import, rendering, approval, export, and validated downloads.
-5. Visual frame inspection and browser inspection of authoring controls.
-6. Comparison of OCR and draft narration with supplied medical slide images and notes. This identifies transcription and source-fidelity problems; it is not clinical guideline validation or a quality pass for the current editorial prompt.
+The practitioner edits narration, an optional three-choice knowledge check, and up to six labelled visual regions. Regions use normalized center coordinates and dimensions and can be linked to narration paragraphs.
 
-See [VALIDATION.md](VALIDATION.md) for measured results and limitations, including the browser tool's local-file restriction and the embedded-browser playback crash.
+Approval records the reviewer label and exact slide revision. These changes clear approval:
+
+- narration text;
+- question, choices, answer, or explanation;
+- source transcription or its checked state;
+- visual-region label, position, size, paragraph link, or order.
+
+The API checks revisions to prevent a stale browser window from overwriting newer work. Populated image transcription must be checked before approval.
+
+## 7. Preview and voice
+
+Voice audition uses a fixed nonmedical sample. A slide preview uses the current saved script and visual plan and burns `DRAFT / UNAPPROVED / FOR REVIEW ONLY` into every frame. Creating or watching a preview does not approve the slide.
+
+Available engines are:
+
+- Qwen3-TTS 1.7B CustomVoice for expressive CUDA narration;
+- Kokoro ONNX for faster local neural speech;
+- Piper as a compact local alternative; and
+- Windows speech when available.
+
+Qwen receives adjacent natural thought blocks in batches of at most two. It preserves output order and records measured cues for each original block. Verified slide WAVs are cached by text, settings, model revision, synthesis recipe, and file hash.
+
+See [Voice and motion](VOICE_AND_MOTION.md).
+
+## 8. Timing and scene rendering
+
+Each natural speech block has a measured audio duration. A 0.18-second gap separates Qwen blocks. Caption cues are estimated within measured blocks; they are not word-level forced alignment.
+
+The renderer adds a lead-in and tail, aligns scene duration to 24 fps, and uses paragraph-linked starts for authored visual regions. Slide PCM is joined before one AAC encode to avoid accumulating compression padding.
+
+Visual modes:
+
+- **Guided focus:** camera movement into reviewed source regions.
+- **Whiteboard:** progressive source-region reveal followed by the full slide.
+- **Studio:** full-slide view with timed callouts.
+- **PowerPoint effects:** supported animations and transitions already present in the sanitized deck.
+
+Slides without cues retain the full source. No mode invents medical imagery or procedural motion.
+
+## 9. Encode, QA, and packaging
+
+FFmpeg produces 1920×1080 H.264 video, AAC audio, and optional selectable subtitles. Captions can also be burned into the image.
+
+FFprobe verifies required streams, dimensions, codec types, and expected duration. PCM checks measure level, clipping, and long silence. The interactive package contains:
+
+```text
+index.html
+presentation.mp4
+captions.srt
+captions.vtt
+transcript.txt
+README.txt
+manifest.json
+quality.json
+chapters.json
+source-flags.json
+provenance.json
+```
+
+The learner interface works without a server after the ZIP is extracted. It includes chapters, transcript search and seeking, playback speed, caption controls, questions with explanations, and session-local progress.
+
+## Failure and recovery behavior
+
+- Only one long application job runs at a time.
+- Cancellation prevents further stages and is checked around model/native calls and inside CPU loops.
+- A blocking Ollama request may return only at completion or timeout.
+- Application restart marks an interrupted in-process job failed so the user can retry.
+- The dedicated full-draft renderer reuses only matching, verified Qwen WAVs and video scenes.
+- Partial outputs are not registered as successful previews or exports.
+- Export requires approved revisions; private draft scripts produce permanently watermarked artifacts through a separate path.
+
+## What verification means
+
+Technical QA establishes that an artifact is complete and playable. It does not establish:
+
+- clinical correctness;
+- source correctness;
+- absence of narration omissions;
+- natural medical pronunciation;
+- learner comprehension; or
+- institutional approval.
+
+Those decisions remain part of practitioner review. See [Validation](VALIDATION.md) for current evidence.

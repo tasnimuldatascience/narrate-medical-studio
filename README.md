@@ -1,159 +1,225 @@
 # Narrate Medical Studio
 
-A local application for turning medical PowerPoint presentations into reviewed narration, captioned video, and interactive learning packages. Built with React, TypeScript, Vite, FastAPI, SQLite, Ollama, optional Qwen3-TTS, Kokoro/Piper, and FFmpeg.
+Narrate Medical Studio is a local Windows application for turning medical PowerPoint decks into reviewed narration, animated 1080p video, captions, and an interactive lesson package.
 
-**Status: working development release, not a validated clinical product.** The workflow accepts different presentations and specialties. The supplied injection decks are test inputs, not hard-coded templates. No presentation content is submitted to a cloud API by this application.
+The application is designed for practitioners who need to inspect the source, correct OCR, edit the teaching script, direct visual emphasis, and approve an exact revision before release. After dependencies and models are installed, presentation content and model inference stay on the workstation.
 
-## What works
+The workflow is presentation-agnostic and medical-domain specialized. The supplied injection deck is a validation input, not a hard-coded template.
 
-- Import `.pptx` and `.pptm`, inspect slide text, notes, editable tables, image counts, and reference URLs.
-- Render high-resolution slide previews using installed Microsoft PowerPoint on Windows, with macros disabled and a sanitized rendering copy.
-- Transcribe rendered image-only slides with local RapidOCR. Inspect the proposed text, recognition confidence, and number/unit warnings under **Source > Image text**, correct it against the slide, and explicitly mark the transcription checked.
-- Review original visuals beside the script. Checkpointed local roles assemble source evidence, draft a spoken explanation and critique it against the original. A bounded revision is re-audited and rejected if it adds detectable numeric/qualifier problems. Authors can edit directly and evaluate a saved script. Model findings require judgment; they do not confer clinical approval.
-- Flag numerical content, limited sources, unreadable characters, tables, image interpretation, and model-reported uncertainty.
-- Use a cinematic production workspace with source/script review, scene navigation, accessible dialogs, and explicit readiness feedback.
-- Add source-grounded multiple-choice knowledge checks with feedback.
-- Author up to six labeled source regions per slide. Set their order, center, width, and height against the actual slide preview; regions are clipped at image edges.
-- Choose **Guided focus**, **Whiteboard**, **Studio**, or supported native **PowerPoint effects**. Source styles use authored regions; slides without cues show their full source. Native mode preserves supported existing effects with documented timing changes. These modes animate existing source material.
-- Audition Qwen Aiden/Ryan with delivery presets or four Kokoro narrators. Speech is generated in complete thought groups; Piper and Windows voice remain alternatives. Generate a permanently marked private video preview of a saved slide before approving a full lesson.
-- Record a named review of each slide revision. Any script, question, cue label, cue position, region size, cue order, or source-transcription change resets approval. The backend blocks export of unapproved slides and blocks approval when populated image text has not been checked.
-- Export any approved slide range as 1080p H.264/AAC MP4, SRT captions, transcript, review manifest, and a self-contained interactive lesson ZIP.
-- Interactive lessons include chapters, transcript search and seeking, playback speeds, knowledge checks, and progress feedback. Extract the ZIP and open `index.html`; no server is required.
-- Store projects, reviews, jobs, model output, and exports in local SQLite/files. Interrupted jobs can be retried.
+> **Project status:** functional development release. It is not clinically validated, production certified, or approved for unsupervised medical publishing. The local evaluator is a review aid and still produces false findings.
 
-## Run on this Windows machine
+## Highlights
 
-New in the editorial milestone: **Build teaching draft** runs checkpointed source, teacher and critic roles with bounded revision; **Evaluate script** shows source-linked findings without changing the script. Optional **Qwen3-TTS** adds expressive delivery presets. **Guided focus** animates authored detail regions, and native PowerPoint export supports effects already present in a deck. See [voice and motion setup](docs/VOICE_AND_MOTION.md) and [implemented architecture](docs/MULTI_AGENT_ARCHITECTURE.md). These features remain subject to the documented clinical, listening and deployment release gates.
+- React 19 and TypeScript authoring interface; no Streamlit.
+- FastAPI backend with local SQLite and filesystem artifacts.
+- `.pptx` and `.pptm` import, safe OOXML extraction, speaker notes, tables, references, and slide rendering.
+- Local OCR for image-heavy slides, with confidence and explicit practitioner confirmation.
+- Checkpointed source analyst, teacher, and evidence-review stages using local Ollama models.
+- Exact evidence spans in reviewer findings; the model cannot invent displayed quotations.
+- Qwen3-TTS CustomVoice for expressive narration, plus Kokoro, Piper, and Windows speech alternatives.
+- Guided focus, Whiteboard, Studio, and supported native PowerPoint-effect rendering.
+- Burned captions, selectable subtitles, chapter navigation, transcript search, and knowledge checks.
+- Revision-bound review gates: changing source text, narration, questions, or visual cues invalidates approval.
+- MP4 and self-contained offline interactive ZIP exports.
 
-From PowerShell in the repository:
+## System overview
+
+```mermaid
+flowchart LR
+    PPT[Medical PowerPoint] --> Source[Safe extraction, rendering, OCR]
+    Source --> Draft[Local teaching draft]
+    Draft --> Review[Evidence-addressed review]
+    Review --> Human[Practitioner review and approval]
+    Human --> Voice[Local voice synthesis]
+    Human --> Visuals[Reviewed visual direction]
+    Voice --> Render[FFmpeg render and QA]
+    Visuals --> Render
+    Render --> Outputs[MP4 and offline lesson ZIP]
+```
+
+The model-assisted stages prepare material for review. Only the practitioner can approve a revision. See [Architecture](docs/MULTI_AGENT_ARCHITECTURE.md) and [Pipeline](docs/PIPELINE.md) for the detailed contracts.
+
+## Current verified result
+
+The supplied 60-slide injection deck completed the private draft pipeline:
+
+| Result | Measurement |
+|---|---:|
+| Lecture duration | 47 min 11.625 sec |
+| Chapters | 60 |
+| Knowledge checks | 8 |
+| Video | H.264, 1920×1080 |
+| Audio | AAC, duration matched to video |
+| Subtitle track | Present |
+| Offline package | ZIP integrity and packaged-video hash verified |
+
+The output remains permanently marked as an unapproved draft. Opening, slide 57 rotation, and the final caption were visually checked. See [Validation](docs/VALIDATION.md) for measurements and limitations.
+
+## Quick start on the configured workstation
+
+From PowerShell:
 
 ```powershell
+cd D:\Projects\video_gen
 .\Start.ps1
 ```
 
-Open `http://127.0.0.1:8765`. Keep the terminal open while the studio is running. Stop it with Ctrl+C. The server binds only to loopback, not to your LAN.
+Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The server listens only on loopback. Keep the PowerShell window open and press `Ctrl+C` to stop it.
 
-The development environment and local English voice assets have been installed on the current workstation. Use Setup & preferences to check availability on the machine where you run the app. Dependencies and model files are excluded from Git.
+## Install on another Windows workstation
 
-## Set up another Windows machine
+### Prerequisites
 
-Prerequisites:
+- Windows 10 or 11
+- Python 3.11–3.13
+- Node.js 22.12 or newer and npm
+- Microsoft PowerPoint for the fully tested rendering path
+- FFmpeg and ffprobe on `PATH`, including H.264 and subtitle support
+- Ollama with a local writing model, such as `qwen3.5:9b`
+- Optional NVIDIA CUDA GPU for Qwen3-TTS
 
-- Python 3.11–3.13, Node.js 22.12+ (tested with Node 24), and npm.
-- Installed Microsoft PowerPoint for Windows slide rendering.
-- FFmpeg **and ffprobe** on PATH, with libx264 and libass support.
-- Ollama with an installed local writing model for optional AI drafting. `qwen3.5:9b` is installed and tuned on the development workstation as a higher-capacity option. The lighter `qwen3:4b` has shown qualifier-preservation errors during evaluation. Neither model has passed a general medical narration quality assessment; use a model that fits your machine and review every result.
-
-Run `Setup.ps1` for explicit dependency and model installation. It recommends Kokoro by default and offers Piper, both engines, or skipping voice downloads. It also offers offline OCR preparation: the pinned RapidOCR wheel already contains its ONNX models, and the setup script copies verified assets into the project and extracts the local character dictionary. Installing dependencies and voice/writing models needs internet access; OCR asset preparation needs no additional model download after its wheel is installed. Afterwards, ordinary authoring and export operate locally. To prepare a disconnected machine, transfer the installed runtime environment, dependencies, and model assets using your organization's software distribution process. A portable offline installer is not yet provided.
+### Application setup
 
 ```powershell
-# Equivalent manual setup
+git clone git@github.com:tasnimuldatascience/narrate-medical-studio.git
+cd narrate-medical-studio
+.\Setup.ps1
+```
+
+`Setup.ps1` creates the Python environment, installs frontend dependencies, builds the UI, and offers local Kokoro, Piper, and OCR setup. It downloads dependencies only during this explicit setup step.
+
+For manual setup:
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 npm.cmd --prefix frontend ci
 npm.cmd --prefix frontend run build
-# Recommended: Kokoro model and voice bank (setup-only network download)
 .\.venv\Scripts\python.exe scripts\download_kokoro.py
-# Prepare OCR from the models bundled in the installed RapidOCR wheel:
 .\.venv\Scripts\python.exe scripts\download_ocr.py
-# Optional compact alternative:
-.\.venv\Scripts\python.exe -m piper.download_voices en_US-lessac-medium --download-dir models
-# Install the model explicitly during setup, if needed:
 ollama pull qwen3.5:9b
+```
+
+To add expressive Qwen narration:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\setup_qwen_voice.py --install-runtime --download-model
+```
+
+This creates a separate pinned runtime under `models/qwen-tts-runtime` and installs the official Qwen3-TTS 1.7B CustomVoice model. See [Voice and motion](docs/VOICE_AND_MOTION.md) for requirements and measured performance.
+
+Then run:
+
+```powershell
 .\Start.ps1
 ```
 
-The UI's Setup page reports renderer, video, voice, OCR, and local model availability. Missing runtime components produce an error rather than switching to a cloud service. OCR verifies its local model and character assets and disables runtime downloads.
+The Setup page reports PowerPoint, FFmpeg, OCR, Ollama, and voice-engine readiness. Missing components fail explicitly; the application does not switch to cloud inference.
 
-## Authoring workflow
+## Practitioner workflow
 
-1. Import your presentation and render its previews.
-2. Set the specialty and learner audience under Setup.
-3. Inspect each visual and its extracted source. For image-only content, open **Source > Image text**, run local OCR, and correct the transcription against the rendered slide. Check numbers, decimals, units, labels, and reading order; recognition confidence does not measure medical accuracy. Mark the image text checked only after comparison. Running OCR again retains existing authored image text; review the new OCR result before replacing your corrections.
-4. Draft or edit a concise spoken explanation. **Build teaching draft** runs the source, teacher and critic workflow; **Evaluate saved script** critiques an existing script without rewriting it. Compare findings with the original evidence: the model may flag correct wording or miss problems. Resolve source disagreements explicitly.
-5. Optionally add a question, three choices, the correct answer, and a source-grounded explanation.
-6. In **Visual story**, explicitly place source regions by clicking the preview or entering percentages. Add reviewed labels, adjust the region width/height, and order the reveals. No clinical region is chosen automatically. Labels support up to 120 characters; each region dimension is 2–100% of the source image (initial size 24%).
-7. Save and verify claims, quantities, terminology, questions, labels, and selected source regions. Approve that revision by name. Editing these items or changing the source transcription/check state resets narration approval; review or regenerate the explanation against the changed source.
-8. Use **Create slide preview** to review a saved slide's narration and motion with a permanent draft banner. For a released lesson, choose an approved range, visual direction, narrator, delivery, pace and caption preference. **Preview voice** uses a fixed nonmedical sample; it is separate from the saved-slide preview.
-9. Inspect the final video, source-region reveals, voice pronunciation, caption timing, and interactive package before distributing it.
+1. Import a `.pptx` or `.pptm` deck and render its slide previews.
+2. Set the specialty and learner audience.
+3. Inspect native text, notes, tables, and references. For image-heavy slides, run local OCR, correct its reading order, terminology, numbers, and units, then mark the transcription checked.
+4. Build a local teaching draft or write the narration directly.
+5. Run the evidence review. Treat findings as suggestions and compare them with the original source.
+6. Add a three-choice knowledge check where useful.
+7. Add up to six visual focus regions and link them to narration paragraphs.
+8. Review the exact source, script, question, and visual plan. Approve that revision by name.
+9. Create a permanently marked slide preview and listen for pacing and medical pronunciation.
+10. Export the approved range and inspect the complete video and interactive lesson before distribution.
 
-Kokoro voices: `af_heart` (Warm American, female), `af_bella` (Conversational American, female), `am_michael` (Clear American, male), and `bf_emma` (British narrator, female). The default is `af_heart` when Kokoro is available.
+Changing the source transcription, script, assessment, cue label, cue geometry, or cue order invalidates approval.
 
-Ollama writes the script; Kokoro turns the reviewed script into speech. This application does not use Voicebox or Qwen TTS. Improving the writing and improving the voice are separate review steps.
+## Output modes
 
-Drafting automatically reads a rendered image-only slide with local OCR if it has no saved transcription. If OCR is unavailable, it asks for setup or manually entered image text. The detected source and draft are saved together only after both writing passes succeed. Automatically detected text remains unchecked; compare it with the slide before approval.
+| Mode | Behavior |
+|---|---|
+| Guided focus | Moves into reviewed source regions and returns to the full-slide context. |
+| Whiteboard | Reveals reviewed source regions in sequence, ending with the full source. |
+| Studio | Keeps the full slide visible with timed callouts and chapter framing. |
+| PowerPoint effects | Uses supported animations and transitions already authored in PowerPoint. |
 
-The learner's reading transcript uses complete speech passages with larger type, search highlights, and a **Show current passage** control. Short captions remain separate for video viewing. Existing exports are immutable; export again to include an updated script or learner interface.
+These modes animate supplied source material. They do not generate or validate anatomical motion.
 
-Subtitle boundaries are estimated from synthesized speech-block durations. They are **not forced-aligned word timings**. Caption and visual-reveal synchronization require playback review, especially for long sentences and medical terminology.
+## Offline and privacy model
 
-Supplied medical examples intentionally have **no automatic clinical approval**. The nonclinical three-slide demonstration in `data/validation` is a software test fixture.
+Runtime data is stored locally:
 
-### Private draft video samples
-
-For an explicitly requested review sample, `scripts/render_draft_preview.py` creates a single-slide video with a permanent **UNAPPROVED / FOR REVIEW ONLY** banner. It uses the saved draft, local Kokoro, and optionally author-supplied source regions timed to paragraph boundaries. It leaves project records and approvals unchanged and does not create a released lesson package. The normal reviewed-export gate still applies to clinical distribution.
-
-```powershell
-.\.venv\Scripts\python.exe scripts\render_draft_preview.py --project-id PROJECT_ID --slide 6
+```text
+data/      private presentations, project database, previews, and exports
+models/    OCR, voice, and optional Qwen-TTS assets
 ```
 
-The sample, draft transcript, source hash, and review flags stay under ignored `data/validation/`. This is a private preview, not evidence that the narration has been medically approved.
+Both directories are excluded from Git. Set `NARRATE_DATA` to move project storage. Local model HTTP calls use loopback with proxy inheritance disabled. The Qwen voice worker sets offline flags and blocks Python socket access.
 
-## Development and checks
+This is not a complete operating-system air gap. PowerPoint, Ollama, FFmpeg, and other independently installed programs are outside the application's process sandbox. Use a disconnected workstation or OS firewall policy when strict network isolation is required.
+
+## Development
+
+Run the focused software checks:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
+npm.cmd --prefix frontend run format:check
 npm.cmd --prefix frontend run build
-# Uses installed rendering, speech and FFmpeg components. Generates synthetic test content.
-# Inspect the script for its selected engine/style; fixture coverage is recorded in docs/VALIDATION.md.
-.\.venv\Scripts\python.exe scripts\verify_pipeline.py
-# Private source audit (replace PROJECT_ID with an imported project ID):
-.\.venv\Scripts\python.exe scripts\audit_slide_sources.py --project-id PROJECT_ID --output data\validation\source-audit.json
-# Private draft comparison; never grants approval:
-.\.venv\Scripts\python.exe scripts\evaluate_narration.py --project-id PROJECT_ID --model qwen3.5:9b --slides 4,6,13 --skip-baseline
 ```
 
-The API schema is available at `/openapi.json`. CDN-based API documentation pages are disabled to keep the runtime independent of internet access. For frontend development, run the backend and `npm.cmd --prefix frontend run dev`; Vite proxies `/api` to port 8765.
+Run the synthetic end-to-end pipeline when PowerPoint, voice assets, and FFmpeg are available:
 
-Tests cover review invalidation, stale revision conflicts, job locks, upload validation, XML entity rejection, macro/external relationship removal, caption handling, local model guards, and package escaping. The integration script runs extraction, rendering, real neural speech, video assembly, and interactive packaging. See `docs/VALIDATION.md` for the current validation record.
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_pipeline.py
+```
 
-## Local storage and architecture
+Useful private utilities:
+
+```powershell
+# Audit extracted/OCR source material.
+.\.venv\Scripts\python.exe scripts\audit_slide_sources.py --project-id PROJECT_ID --output data\validation\source-audit.json
+
+# Compare saved narration with source using a local model.
+.\.venv\Scripts\python.exe scripts\evaluate_narration.py --project-id PROJECT_ID --model qwen3.5:9b --slides 4,6,13 --skip-baseline
+
+# Run a private evaluator regression dataset.
+.\.venv\Scripts\python.exe scripts\calibrate_evidence_review.py --dataset PRIVATE_DATASET.json --model qwen3.5:9b --output-dir data\validation\evidence-review
+```
+
+The OpenAPI schema is available at `/openapi.json`. Interactive CDN documentation is disabled so the runtime does not depend on the internet.
+
+## Repository map
 
 ```text
-React interface (localhost)
-        |
-FastAPI + SQLite review records
-        |
-Safe OOXML extraction -> PowerPoint slide images -> optional local OCR + checked transcription
-        |
-Local Ollama draft -> local editorial/source-comparison pass -> practitioner edit and approval
-        |
-Local Kokoro/Piper voice -> estimated captions + authored source-region scenes -> FFmpeg
-        |
-MP4 + interactive HTML package + review manifest
+backend/                     FastAPI API, extraction, review, voice, rendering, packaging
+frontend/                    React/TypeScript/Vite authoring interface
+scripts/                     setup, audit, calibration, preview, and pipeline tools
+tests/                       backend and media contract tests
+docs/MULTI_AGENT_ARCHITECTURE.md
+docs/PIPELINE.md
+docs/VOICE_AND_MOTION.md
+docs/VALIDATION.md
+docs/ROADMAP.md
 ```
 
-`data/` contains private presentation content and exports. Back it up with the app stopped. `models/` holds installed voice models, the Kokoro voice bank, and verified OCR assets under `models/ocr/`. Neither folder is version-controlled. Set `NARRATE_DATA` to change storage and `NARRATE_VOICE` to choose an installed Piper `.onnx` file with its matching JSON config. `NARRATE_KOKORO_MODEL` and `NARRATE_KOKORO_VOICES` override the local Kokoro model and voice-bank paths; `NARRATE_OCR_MODELS` sets the directory containing the complete verified OCR asset set. The Kokoro download script records downloaded asset sources, sizes, and calculated hashes in `models/kokoro-manifest.json`; runtime synthesis never initiates this download.
+## Known limitations
 
-On non-Windows systems, the rendering adapter supports an explicit LibreOffice executable through `NARRATE_SOFFICE`; cross-platform packaging and verification remain pending.
+- The evidence reviewer is fail-closed at the schema and quotation layers, but live tests still found false allegations on unchanged quantities. It cannot authorize edits or approval.
+- Clinical accuracy, source correctness, and medical pronunciation require practitioner review.
+- Subtitle timing uses measured speech blocks and estimation within them; it is not forced word alignment.
+- The supplied decks contain no native animation timelines, so PowerPoint-effects mode cannot add motion by itself.
+- Review names are local labels, not authenticated signatures.
+- Project data is not encrypted by the application.
+- A signed desktop installer, multi-user deployment, SCORM/xAPI export, and validated cross-platform support are not implemented.
 
-## Boundaries and next work
+See [Roadmap](docs/ROADMAP.md) for release gates.
 
-- Clinical validity requires expert review. Model prompts and number checks cannot prove that a narration is scientifically accurate or that all original facts were preserved.
-- Static slide extraction preserves composition, not PowerPoint animations, interactive controls, or embedded video playback. Authored region reveals add new motion to the extracted source; they do not reconstruct the original animations or generate medically validated anatomical motion. Active embedded objects are removed from the rendering copy.
-- OCR transcribes visible text; it does not understand anatomy, verify references, or resolve conflicts between slides and notes. Reading order, punctuation, quantities, and units may be wrong even at high recognition confidence. Visual reasoning, automatic reference verification, a medical pronunciation dictionary, multilingual quality evaluation, SCORM/xAPI, collaborative identity, and a signed desktop installer are not implemented.
-- The two-pass narration editor is still being evaluated on the supplied medical slides. Readability diagnostics and a larger local model do not establish source fidelity or clinical validity. Qualifier changes and omitted source details remain explicit review targets.
-- The English voices are general neural voices. Medication and anatomical pronunciation require listening review. Paragraph-block synthesis improves continuity but does not guarantee natural delivery or pronunciation accuracy. Subtitle timing remains estimated.
-- Reviewers are locally entered names, not authenticated signatures. Local data is not encrypted by this application. This is a single-user workstation tool, not a multi-user hospital deployment.
-- The application makes no remote inference requests and disables HTTP proxy inheritance for its local AI calls. PowerPoint, Ollama, and other independently installed programs are not OS-network-sandboxed by this application. Use an OS firewall/disconnected environment for a strict air gap.
-- A running Ollama request may take up to its timeout to acknowledge cancellation. OCR checks cancellation before and after native inference, so an in-progress inference call must return first. Long imports and very large decks need additional performance profiling.
+## Documentation
 
-See `docs/ROADMAP.md` for a production-readiness plan with acceptance criteria.
+- [Architecture](docs/MULTI_AGENT_ARCHITECTURE.md) — components, trust boundaries, state, and release authority
+- [Pipeline](docs/PIPELINE.md) — end-to-end processing and failure behavior
+- [Voice and motion](docs/VOICE_AND_MOTION.md) — engines, batching, timing, and visual modes
+- [Validation](docs/VALIDATION.md) — measured checks and known failures
+- [Roadmap](docs/ROADMAP.md) — remaining production work
 
-The complete processing flow and review boundaries are documented in [docs/PIPELINE.md](docs/PIPELINE.md).
+## Licensing
 
-## Dependency licensing
-
-Dependencies, Kokoro model/voice assets, and alternative voices have their own terms. Piper is GPL-3.0; PyMuPDF is AGPL/commercial dual-licensed; FFmpeg licensing depends on its build (libx264 commonly implies GPL). PowerPoint requires the user's license. Review these before redistributing a packaged commercial product. This repository does not assign a public open-source license to the application code.
-
-Official implementation references: [React](https://react.dev/versions), [Vite](https://vite.dev/guide/), [Ollama API](https://docs.ollama.com/api/generate), [Piper](https://github.com/OHF-Voice/piper1-gpl).
+The repository does not currently declare a public application-code license. Dependencies and model assets retain their own licenses. Review redistribution terms for PowerPoint, FFmpeg/libx264, PyMuPDF, Piper, Kokoro, Qwen3-TTS, Ollama, and model weights before commercial distribution.
